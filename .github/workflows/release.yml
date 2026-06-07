@@ -1,0 +1,201 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          version="${GITHUB_REF#refs/tags/v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check-version
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            zigbuild: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            zigbuild: true
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.check-version.outputs.version }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: "${{ matrix.zigbuild && 'zig cargo:cargo-zigbuild' || 'rust' }}"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.zigbuild }}" = "true" ]; then
+            cargo zigbuild --release --locked --target ${{ matrix.target }}.2.17
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+
+      - name: Package
+        run: |
+          archive="holla-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C "target/${{ matrix.target }}/release" holla
+          shasum -a 256 "$archive" > "$archive.sha256"
+          echo "archive=$archive" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: holla-${{ matrix.target }}
+          path: |
+            holla-*.tar.gz
+            holla-*.tar.gz.sha256
+
+  release:
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      arm64_macos: ${{ steps.shas.outputs.arm64_macos }}
+      x86_macos: ${{ steps.shas.outputs.x86_macos }}
+      arm64_linux: ${{ steps.shas.outputs.arm64_linux }}
+      x86_linux: ${{ steps.shas.outputs.x86_linux }}
+    env:
+      VERSION: ${{ needs.check-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Read platform SHA256s
+        id: shas
+        run: |
+          read_sha() { awk '{print $1}' "artifacts/$1.sha256"; }
+          echo "arm64_macos=$(read_sha "holla-${VERSION}-aarch64-apple-darwin.tar.gz")" >> "$GITHUB_OUTPUT"
+          echo "x86_macos=$(read_sha "holla-${VERSION}-x86_64-apple-darwin.tar.gz")" >> "$GITHUB_OUTPUT"
+          echo "arm64_linux=$(read_sha "holla-${VERSION}-aarch64-unknown-linux-gnu.tar.gz")" >> "$GITHUB_OUTPUT"
+          echo "x86_linux=$(read_sha "holla-${VERSION}-x86_64-unknown-linux-gnu.tar.gz")" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${VERSION}" \
+            artifacts/holla-*.tar.gz \
+            artifacts/holla-*.tar.gz.sha256 \
+            --title "v${VERSION}" \
+            --generate-notes
+
+  homebrew:
+    if: needs.release.result == 'success'
+    needs: [check-version, release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: donbeave/homebrew-holla
+          ref: main
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+          ARM64_MAC_SHA256: ${{ needs.release.outputs.arm64_macos }}
+          X86_MAC_SHA256: ${{ needs.release.outputs.x86_macos }}
+          ARM64_LINUX_SHA256: ${{ needs.release.outputs.arm64_linux }}
+          X86_LINUX_SHA256: ${{ needs.release.outputs.x86_linux }}
+        run: |
+          cat > homebrew-tap/Formula/holla.rb <<EOF
+          class Holla < Formula
+            desc "Adaptive dev environment CLI — adapts to what you have installed"
+            homepage "https://github.com/donbeave/holla"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/donbeave/holla/releases/download/v${VERSION}/holla-${VERSION}-aarch64-apple-darwin.tar.gz"
+                sha256 "${ARM64_MAC_SHA256}"
+              end
+              on_intel do
+                url "https://github.com/donbeave/holla/releases/download/v${VERSION}/holla-${VERSION}-x86_64-apple-darwin.tar.gz"
+                sha256 "${X86_MAC_SHA256}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/donbeave/holla/releases/download/v${VERSION}/holla-${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${ARM64_LINUX_SHA256}"
+              end
+              on_intel do
+                url "https://github.com/donbeave/holla/releases/download/v${VERSION}/holla-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${X86_LINUX_SHA256}"
+              end
+            end
+
+            def install
+              bin.install "holla"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/holla --version")
+            end
+          end
+          EOF
+
+      - name: Push formula update
+        working-directory: homebrew-tap
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/holla.rb
+          git diff --cached --quiet --exit-code && echo "Formula already up to date" && exit 0
+          git commit -m "holla ${VERSION}"
+          git push
