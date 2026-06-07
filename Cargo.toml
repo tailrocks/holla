@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 description = "Adaptive dev environment CLI — adapts to what you have installed"
 license = "MIT"
-repository = "https://github.com/donbeave/holla"
-homepage = "https://github.com/donbeave/holla"
+repository = "https://github.com/tailrocks/holla"
+homepage = "https://github.com/tailrocks/holla"
 keywords = ["cli", "dev", "docker", "git", "brew"]
 categories = ["command-line-utilities", "development-tools"]
 
