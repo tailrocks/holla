@@ -3,13 +3,14 @@
 # publish the apt repository. This is the dedicated deb flow, modeled directly
 # on velnor-project/velnor/.github/workflows/release-deb.yml + velnor-apt.
 #
-# The build runs inside a `debian:stable-slim` container so that all system
-# library dependencies (resolved via dpkg-shlibdeps / `$auto` in cargo-deb)
-# are for the latest and greatest Debian, not Ubuntu.
+# We only target the latest and greatest Debian (recent glibc via zigbuild,
+# no old-glibc .2.17 compatibility shims — those are only for the portable
+# tarball builds in the main release.yml for Homebrew). $auto depends in
+# cargo-deb + modern target produce a .deb suitable for current Debian/Ubuntu.
 #
-# We only target the latest and greatest Debian (recent glibc). No old-glibc
-# compatibility shims (those are only in the portable tarball builds for
-# Homebrew).
+# Separate from main release.yml (which does multi-platform tarballs +
+# Homebrew tap update) so that .debs can be cross-uploaded to holla-apt's
+# own releases (allowing publish.yml to consume them with default GITHUB_TOKEN).
 #
 # Why separate from the main release.yml?
 # - Main release handles multi-platform tarballs + Homebrew tap update.
@@ -85,7 +86,7 @@ jobs:
         uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
 
       - name: Install cargo-deb
-        run: cargo install cargo-deb --locked
+        run: mise exec -- cargo install cargo-deb --locked
 
       - name: Build
         run: |
