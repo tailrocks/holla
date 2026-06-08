@@ -39,16 +39,34 @@ Groups appear only when the relevant tool is detected. A machine without Docker 
 
 ## Install
 
+### macOS (Homebrew)
+
 ```bash
 brew tap tailrocks/holla
 brew install holla
 ```
 
-Or from source:
+### Debian / Ubuntu (apt)
+
+Once the `tailrocks/holla-apt` repository is published (see that repo's README for the one-time GPG + Pages setup):
+
+```bash
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://<pages-host>/holla-apt/holla.gpg \
+  | sudo tee /etc/apt/keyrings/holla.gpg > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/holla.gpg] https://<pages-host>/holla-apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/holla.list
+sudo apt update
+sudo apt install holla
+```
+
+### From source
 
 ```bash
 cargo install --git https://github.com/tailrocks/holla
 ```
+
+Debian packages (`.deb`) for `amd64` and `arm64` are also attached to every GitHub Release and can be installed directly with `dpkg -i`.
 
 ## Usage
 

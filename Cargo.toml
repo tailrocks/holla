@@ -32,3 +32,26 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+# Debian packaging via cargo-deb.
+# The dedicated .github/workflows/release-deb.yml (triggered on tags, modeled on
+# velnor-project/velnor's release-deb.yml) handles:
+#   cargo deb --target <target> --no-build --deb-version "$VERSION"
+# It produces the .deb(s), attaches to the source release, uploads to the
+# holla-apt repo's release (cross-repo), and triggers holla-apt/publish.yml.
+# See also the assets handling and glibc 2.17 zigbuild in that workflow.
+[package.metadata.deb]
+name = "holla"
+maintainer = "Tailrocks <info@tailrocks.com>"
+copyright = "2026, Tailrocks"
+license-file = []
+extended-description = """\
+Adaptive dev environment CLI. Run `holla` in any directory and get an
+interactive menu showing exactly what you can do — based on what tools
+are installed on your machine. No config. No setup."""
+section = "devel"
+priority = "optional"
+depends = "$auto"
+maintainer-scripts = "debian/"
+# The [[bin]] "holla" is automatically packaged to /usr/bin/holla.
+# Add extra assets here later if we ship shell completions, man pages, etc.

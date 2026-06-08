@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  configure)
+    # Friendly message on fresh install or upgrade.
+    echo "holla installed. Run 'holla' in any directory to get an adaptive menu"
+    echo "for the tools you actually have (git, docker, mise, brew, gradle, etc.)."
+    ;;
+esac
+
+exit 0
