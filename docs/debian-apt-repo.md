@@ -34,7 +34,8 @@ Own repository, hosted on GitHub (GitHub Pages), built + signed in CI on tag.
    - Private key stored as GitHub Actions secrets in the `holla-apt` repo (`APT_GPG_PRIVATE_KEY`, `APT_GPG_PASSPHRASE`); imported in CI for reprepro `SignWith`.
    - Public key published at `https://apt.tailrocks.com/holla-apt/holla.gpg` (and in the repo) for users to install into `/etc/apt/keyrings`.
 
-4. **Host on GitHub Pages** — publish the reprepro output tree (`dists/`, `pool/`, `holla.gpg`) to the `gh-pages` branch.
+4. **Host on GitHub Pages** — the reprepro output tree (`dists/`, `pool/`, `holla.gpg`) is deployed via a GitHub Actions workflow (using the official `actions/deploy-pages`).
+   The `gh-pages` branch is still maintained as an internal git state store for `reprepro` (to keep old package versions).
    Served at `https://apt.tailrocks.com/holla-apt/`.
 
 ### Where it lives (storage decision)
@@ -45,6 +46,8 @@ Own repository, hosted on GitHub (GitHub Pages), built + signed in CI on tag.
 - **Keep it lean**: the holla binary is small; a few versions fit comfortably.
 
 ## CI (GitHub Actions, on tag `v*` or manual dispatch)
+
+**Policy:** You should always use GitHub Actions for GitHub Pages deployments (never "Deploy from a branch"). Use `actions/configure-pages`, `actions/upload-pages-artifact`, and `actions/deploy-pages`. The `gh-pages` branch (if used) is only for internal state (e.g. reprepro history), never as the Pages source.
 
 `holla/.github/workflows/release-deb.yml` (separate from the main multi-platform tarball + Homebrew release.yml):
 1. Uses `jdx/mise-action` (jackin pin) + sccache + mold + `cargo zigbuild` (for arm64) — no old glibc .2.17 shims (latest Debian only).
@@ -59,7 +62,8 @@ Own repository, hosted on GitHub (GitHub Pages), built + signed in CI on tag.
 - Imports GPG from secrets.
 - Checks out `gh-pages` state, injects keyid into `conf/distributions`.
 - `reprepro -b public includedeb stable ...`
-- Publishes the `public/` tree to `gh-pages` via `peaceiris/actions-gh-pages` (keep_files: true).
+- Uploads the `public/` tree as a Pages artifact and deploys it with `actions/deploy-pages`.
+  The gh-pages branch is still updated (for reprepro state only).
 
 Each new tag on holla → new .deb(s) → uploaded cross-repo → published signed apt tree → `apt upgrade` picks it up.
 
