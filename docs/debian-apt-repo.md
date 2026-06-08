@@ -31,7 +31,7 @@ Own repository, hosted on GitHub (GitHub Pages), built + signed in CI on tag.
    - `reprepro includedeb stable holla_*.deb` → builds `dists/` + `pool/`, generates `Packages`, `Release`, and a **GPG-signed** `InRelease`.
 
 3. **Sign** — a dedicated GPG signing key.
-   - Private key and passphrase stored first in 1Password (vault "tailrocks", item "holla-apt GPG Signing Key" — see one-time setup in holla-apt README for exact structure). Manually copy them to the GitHub repo secrets `APT_GPG_PRIVATE_KEY` / `APT_GPG_PASSPHRASE` (no 1Password loading happens inside GitHub Actions). Imported in CI for reprepro `SignWith`.
+   - Private key and passphrase are stored securely by maintainers and manually copied into the GitHub repository secrets `APT_GPG_PRIVATE_KEY` / `APT_GPG_PASSPHRASE` (no loading from external secret managers happens inside GitHub Actions). Imported in CI for reprepro `SignWith`.
    - Public key published at `https://holla-apt.tailrocks.com/holla.gpg` (and in the repo) for users to install into `/etc/apt/keyrings`.
 
 4. **Host on GitHub Pages** — the reprepro output tree (`dists/`, `pool/`, `holla.gpg`) is deployed via a GitHub Actions workflow (using the official `actions/deploy-pages`).
