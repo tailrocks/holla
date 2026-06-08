@@ -19,7 +19,7 @@ tokio = { version = "1.45", features = ["full"] }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 owo-colors = "4.1"
-tabled = { version = "0.17", features = ["std"] }
+tabled = { version = "0.21", features = ["std"] }
 indicatif = { version = "0.17", features = ["tokio"] }
 anyhow = "1.0"
 thiserror = "2.0"
