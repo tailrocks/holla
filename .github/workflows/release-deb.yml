@@ -47,7 +47,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
@@ -71,7 +71,7 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/cache
@@ -118,7 +118,7 @@ jobs:
           sha256sum "$DEB_DST" | awk '{print $1}' > "$DEB_DST.sha256"
           ls -l "$DEB_DST"*
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: holla-deb-${{ matrix.target }}
           path: |
@@ -131,7 +131,7 @@ jobs:
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           merge-multiple: true
