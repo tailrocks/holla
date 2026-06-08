@@ -1,5 +1,3 @@
-use std::path::Path;
-use which::which;
 
 #[derive(Debug, Clone)]
 pub struct MiseTask {

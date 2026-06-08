@@ -1,5 +1,3 @@
-name: Release deb
-
 # Build holla .deb(s) for Linux on a version tag, attach them to the GitHub
 # Release (source), and (optionally) push them to the holla-apt repo so it can
 # publish the apt repository. This is the dedicated deb flow, modeled directly

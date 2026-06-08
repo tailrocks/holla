@@ -1,5 +1,3 @@
-use anyhow::Result;
-use crate::tui::{TaskDef, run_parallel_tasks, run_tasks};
 
 pub async fn pull_all() -> Result<()> {
     let tasks = find_git_repos()

@@ -1,5 +1,3 @@
-name: Renovate
-
 on:
   merge_group:
   schedule:

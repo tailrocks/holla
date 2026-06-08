@@ -1,5 +1,3 @@
-name: Renovate Validate
-
 on:
   push:
     branches: [main]

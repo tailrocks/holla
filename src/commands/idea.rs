@@ -1,5 +1,3 @@
-use anyhow::Result;
-use crate::tui::{TaskDef, run_tasks};
 
 pub async fn clean() -> Result<()> {
     run_tasks(vec![

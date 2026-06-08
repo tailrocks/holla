@@ -1,5 +1,3 @@
-mod commands;
-mod probe;
 mod tui;
 
 use clap::Command;
