@@ -1,7 +1,14 @@
 # Build holla .deb(s) for Linux on a version tag, attach them to the GitHub
 # Release (source), and (optionally) push them to the holla-apt repo so it can
-# publish the apt repository. This is the dedicated deb flow, modeled directly
-# on velnor-project/velnor/.github/workflows/release-deb.yml + velnor-apt.
+# publish the apt repository. This is the dedicated deb flow.
+#
+# Both holla and velnor now use the exact same modern approach:
+# - jdx/mise-action to install rust + zig + cargo-zigbuild (project standard)
+# - sccache + mold for fast/reproducible builds
+# - cargo zigbuild --release --locked --target $TGT (modern glibc, no .2.17)
+# - cargo deb --target $TGT --no-build --deb-version "$VERSION"
+# - Matrix for amd64 + arm64
+# - Staging + artifact per target, then attach + optional cross to *-apt
 #
 # We only target the latest and greatest Debian (recent glibc via zigbuild,
 # no old-glibc .2.17 compatibility shims — those are only for the portable

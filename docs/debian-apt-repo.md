@@ -87,7 +87,7 @@ dpkg -i holla_*.deb   # from a holla GitHub Release
 - **cargo-deb**: fits the Rust project (config in `Cargo.toml`); `maintainer-scripts=debian/`.
 - **Dedicated apt repo + cross-upload**: allows the publish job to use only its own default `GITHUB_TOKEN` (no need to read the potentially private holla repo). Same pattern as velnor/velnor-apt.
 - **Latest Debian only**: builds target modern glibc (no .2.17 compat in the deb flow; that is only for the portable tarballs used by Homebrew). Uses debian:stable-slim intent in build (via runner + target choice).
-- **Multi-arch**: amd64 (native) + arm64 (via zigbuild) to match the matrix.
+- **Multi-arch**: amd64 + arm64 (via zigbuild on ubuntu runner) using the shared holla/velnor pattern.
 - **No auto-merge / Renovate etc.**: follow the org standards (root renovate.json, GH_RENOVATE_TOKEN, manual merges only).
 - **Apache 2.0**: only on repo-level files (LICENSE, READMEs, manifests like Cargo.toml / distributions); no source headers.
 
