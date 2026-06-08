@@ -1,3 +1,4 @@
+use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -18,7 +19,7 @@ pub struct Action {
     pub label: String,
     pub description: String,
     pub preview: String,
-    pub handler: Box<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>>>>>,
+    pub handler: Box<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>>>>>,
 }
 
 pub struct Group {
@@ -225,8 +226,8 @@ impl Menu {
             });
             system_actions.push(Action {
                 label: "docker: clean everything".into(),
-                description: "Remove all containers, images, volumes, networks".into(),
-                preview: "$ docker system prune --force\n$ docker volume prune --force\n$ docker network prune --force".into(),
+                description: "Stop/remove containers, force-remove all images, prune networks/system/volumes (matches legacy docker_clean_all)".into(),
+                preview: "$ docker ps -qa | xargs docker stop\n$ docker ps -qa | xargs docker rm\n$ docker rmi --force $(docker images -qa)\n$ docker network rm ...\n$ docker system prune --force\n$ docker volume prune --force".into(),
                 handler: Box::new(|| Box::pin(crate::commands::docker::clean())),
             });
         }
@@ -260,7 +261,7 @@ fn build_upgrade_preview(probe: &Probe) -> String {
     lines.join("\n")
 }
 
-async fn run_shell(cmd: &str) -> Result<()> {
+async fn run_shell(cmd: &str) -> anyhow::Result<()> {
     use crate::tui::{TaskDef, run_tasks};
     run_tasks(vec![TaskDef {
         label: cmd.to_owned(),
@@ -270,7 +271,7 @@ async fn run_shell(cmd: &str) -> Result<()> {
     .await
 }
 
-pub async fn run(menu: Menu) -> Result<()> {
+pub async fn run(menu: Menu) -> anyhow::Result<()> {
     if menu.groups.is_empty() {
         println!("No supported tools or context detected.");
         return Ok(());

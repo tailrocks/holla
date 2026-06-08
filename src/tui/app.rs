@@ -1,3 +1,4 @@
+use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -46,15 +47,15 @@ struct RunningTask {
     state: TaskState,
 }
 
-pub async fn run_tasks(tasks: Vec<TaskDef>) -> Result<()> {
+pub async fn run_tasks(tasks: Vec<TaskDef>) -> anyhow::Result<()> {
     run_tui(tasks, false).await
 }
 
-pub async fn run_parallel_tasks(tasks: Vec<TaskDef>) -> Result<()> {
+pub async fn run_parallel_tasks(tasks: Vec<TaskDef>) -> anyhow::Result<()> {
     run_tui(tasks, true).await
 }
 
-async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> Result<()> {
+async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;

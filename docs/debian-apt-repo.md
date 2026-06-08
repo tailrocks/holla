@@ -32,10 +32,10 @@ Own repository, hosted on GitHub (GitHub Pages), built + signed in CI on tag.
 
 3. **Sign** — a dedicated GPG signing key.
    - Private key stored as GitHub Actions secrets in the `holla-apt` repo (`APT_GPG_PRIVATE_KEY`, `APT_GPG_PASSPHRASE`); imported in CI for reprepro `SignWith`.
-   - Public key published at `https://www.zhokhov.com/holla-apt/holla.gpg` (and in the repo) for users to install into `/etc/apt/keyrings`.
+   - Public key published at `https://apt.tailrocks.com/holla-apt/holla.gpg` (and in the repo) for users to install into `/etc/apt/keyrings`.
 
 4. **Host on GitHub Pages** — publish the reprepro output tree (`dists/`, `pool/`, `holla.gpg`) to the `gh-pages` branch.
-   Served at `https://www.zhokhov.com/holla-apt/`.
+   Served at `https://apt.tailrocks.com/holla-apt/`.
 
 ### Where it lives (storage decision)
 - **Store = GitHub Pages.** apt fetches the signed tree over HTTPS directly.
@@ -67,9 +67,9 @@ Each new tag on holla → new .deb(s) → uploaded cross-repo → published sign
 
 ```bash
 sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://www.zhokhov.com/holla-apt/holla.gpg \
+curl -fsSL https://apt.tailrocks.com/holla-apt/holla.gpg \
   | sudo tee /etc/apt/keyrings/holla.gpg > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/holla.gpg] https://www.zhokhov.com/holla-apt stable main" \
+echo "deb [signed-by=/etc/apt/keyrings/holla.gpg] https://apt.tailrocks.com/holla-apt stable main" \
   | sudo tee /etc/apt/sources.list.d/holla.list
 sudo apt update
 sudo apt install holla
@@ -95,4 +95,4 @@ See holla's `release-deb.yml`, `Cargo.toml` (`[package.metadata.deb]`), `debian/
 
 The design is modeled directly on `velnor-project/velnor` + `velnor-apt` (and informed by `jackin-project/jackin` for the mise + zig + sccache CI patterns). 
 
-For the consumer side in ChainArgos servers: see `ChainArgos/java-monorepo/ansible-configs/install-base.yml` (holla apt tasks in the common base, using the www.zhokhov.com host and velnor-style idempotent tasks).
+For the consumer side in ChainArgos servers: see `ChainArgos/java-monorepo/ansible-configs/install-base.yml` (holla apt tasks in the common base, using the apt.tailrocks.com host and velnor-style idempotent tasks).

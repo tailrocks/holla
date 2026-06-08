@@ -1,6 +1,7 @@
 use crate::probe::Probe;
+use crate::tui::{TaskDef, run_parallel_tasks, run_tasks};
 
-pub async fn run_all() -> Result<()> {
+pub async fn run_all() -> anyhow::Result<()> {
     let probe = Probe::run();
     let mut tasks = Vec::new();
     if probe.mise {
@@ -16,7 +17,7 @@ pub async fn run_all() -> Result<()> {
     run_parallel_tasks(tasks).await
 }
 
-pub async fn run_brew() -> Result<()> {
+pub async fn run_brew() -> anyhow::Result<()> {
     run_tasks(vec![
         TaskDef::new("brew update", "brew", &["update"]),
         TaskDef::new("brew upgrade", "brew", &["upgrade"]),
@@ -25,7 +26,7 @@ pub async fn run_brew() -> Result<()> {
     .await
 }
 
-pub async fn run_brew_casks() -> Result<()> {
+pub async fn run_brew_casks() -> anyhow::Result<()> {
     run_tasks(vec![
         TaskDef::new("brew update", "brew", &["update"]),
         TaskDef::new("brew upgrade casks", "brew", &["upgrade", "--cask", "--greedy"]),
@@ -34,10 +35,10 @@ pub async fn run_brew_casks() -> Result<()> {
     .await
 }
 
-pub async fn run_mise() -> Result<()> {
+pub async fn run_mise() -> anyhow::Result<()> {
     run_tasks(vec![TaskDef::new("mise upgrade", "mise", &["upgrade"])]).await
 }
 
-pub async fn run_amp() -> Result<()> {
+pub async fn run_amp() -> anyhow::Result<()> {
     run_tasks(vec![TaskDef::new("amp update", "amp", &["update"])]).await
 }

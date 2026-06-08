@@ -1,5 +1,6 @@
+use crate::tui::{TaskDef, run_tasks};
 
-pub async fn clean() -> Result<()> {
+pub async fn clean() -> anyhow::Result<()> {
     run_tasks(vec![
         TaskDef {
             label: "Removing .idea dirs".into(),

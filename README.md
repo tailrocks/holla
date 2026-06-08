@@ -50,7 +50,7 @@ brew install holla
 
 The recommended way (used for servers in this environment) is via the published `holla-apt` repository.
 
-See the full design and install instructions in [docs/debian-apt-repo.md](docs/debian-apt-repo.md) (includes the proper host `www.zhokhov.com/holla-apt`, matching the velnor-apt pattern used in ChainArgos, GPG setup, CI flow, and user install with `signed-by`).
+See the full design and install instructions in [docs/debian-apt-repo.md](docs/debian-apt-repo.md) (includes the proper host `apt.tailrocks.com/holla-apt`, matching the velnor-apt pattern used in ChainArgos, GPG setup, CI flow, and user install with `signed-by`).
 
 Debian packages (`.deb`) for `amd64` and `arm64` are also attached to every GitHub Release and can be installed directly with `dpkg -i` as a fallback.
 
