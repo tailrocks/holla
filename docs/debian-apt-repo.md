@@ -35,19 +35,18 @@ Own repository, hosted on GitHub (GitHub Pages), built + signed in CI on tag.
    - Public key published at `https://holla-apt.tailrocks.com/holla.gpg` (and in the repo) for users to install into `/etc/apt/keyrings`.
 
 4. **Host on GitHub Pages** — the reprepro output tree (`dists/`, `pool/`, `holla.gpg`) is deployed via a GitHub Actions workflow (using the official `actions/deploy-pages`).
-   The `gh-pages` branch is still maintained as an internal git state store for `reprepro` (to keep old package versions).
-   Served at `https://holla-apt.tailrocks.com/`.
+   GitHub Pages is deployed via GitHub Actions (recommended). The index on Pages includes only currently published versions (old .debs remain in historical Releases but are not part of the current apt repo). Served at `https://holla-apt.tailrocks.com/`.
 
 ### Where it lives (storage decision)
 - **Store = GitHub Pages.** apt fetches the signed tree over HTTPS directly.
-- **Dedicated repo** `tailrocks/holla-apt` (NOT the holla source repo) so the `.deb` binaries don't bloat the code git history; the signed tree lives on its `gh-pages` branch.
+- **Dedicated repo** `tailrocks/holla-apt` (NOT the holla source repo) so the `.deb` binaries don't bloat the code git history; the index on Pages is generated fresh for current versions only.
 - **GitHub Releases** is used as the blob store for the raw `.deb` assets (attached by `release-deb.yml`); the `holla-apt` publish downloads from the apt-repo's own release for security (default GITHUB_TOKEN works).
 - **Cross-repo upload pattern**: `holla`'s `release-deb.yml` (on tag) builds the debs (using jackin-style mise + zigbuild for latest Debian glibc only), attaches to holla release, then uploads the debs to `holla-apt`'s releases (using `GH_HOLLA_APT_TOKEN`) and triggers its `publish.yml`.
 - **Keep it lean**: the holla binary is small; a few versions fit comfortably.
 
 ## CI (GitHub Actions, on tag `v*` or manual dispatch)
 
-**Policy:** You should always use GitHub Actions for GitHub Pages deployments (never "Deploy from a branch"). Use `actions/configure-pages`, `actions/upload-pages-artifact`, and `actions/deploy-pages`. The `gh-pages` branch (if used) is only for internal state (e.g. reprepro history), never as the Pages source.
+**Policy:** You should always use GitHub Actions for GitHub Pages deployments (never "Deploy from a branch"). Use `actions/configure-pages`, `actions/upload-pages-artifact`, and `actions/deploy-pages`. The index on Pages is always for currently published versions only.
 
 `holla/.github/workflows/release-deb.yml` (separate from the main multi-platform tarball + Homebrew release.yml):
 1. Uses `jdx/mise-action` (jackin pin) + sccache + mold + `cargo zigbuild` (for arm64) — no old glibc .2.17 shims (latest Debian only).
@@ -60,10 +59,8 @@ Own repository, hosted on GitHub (GitHub Pages), built + signed in CI on tag.
 `holla-apt/.github/workflows/publish.yml` (triggered by dispatch or repo_dispatch):
 - Downloads the .deb(s) from *this* (`holla-apt`) repo's release (using default token — the cross-upload from holla makes this possible).
 - Imports GPG from secrets.
-- Checks out `gh-pages` state, injects keyid into `conf/distributions`.
-- `reprepro -b public includedeb stable ...`
+- Builds fresh reprepro tree with only the current .debs (no state branch; old versions forgotten from index per maintainer preference).
 - Uploads the `public/` tree as a Pages artifact and deploys it with `actions/deploy-pages`.
-  The gh-pages branch is still updated (for reprepro state only).
 
 Each new tag on holla → new .deb(s) → uploaded cross-repo → published signed apt tree → `apt upgrade` picks it up.
 
