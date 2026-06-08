@@ -48,19 +48,11 @@ brew install holla
 
 ### Debian / Ubuntu (apt)
 
-The recommended way (used for servers in this environment) is via the published `holla-apt` repository at www.zhokhov.com (see [holla-apt](https://github.com/tailrocks/holla-apt) for the one-time GPG + Pages setup, and its README for the exact hosting details matching velnor-apt).
+The recommended way (used for servers in this environment) is via the published `holla-apt` repository.
 
-```bash
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://www.zhokhov.com/holla-apt/holla.gpg \
-  | sudo tee /etc/apt/keyrings/holla.gpg > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/holla.gpg] https://www.zhokhov.com/holla-apt stable main" \
-  | sudo tee /etc/apt/sources.list.d/holla.list
-sudo apt update
-sudo apt install holla
-```
+See the full design and install instructions in [docs/debian-apt-repo.md](docs/debian-apt-repo.md) (includes the proper host `www.zhokhov.com/holla-apt`, matching the velnor-apt pattern used in ChainArgos, GPG setup, CI flow, and user install with `signed-by`).
 
-(Debian packages are also attached to holla GitHub Releases for direct `dpkg -i` as a fallback.)
+Debian packages (`.deb`) for `amd64` and `arm64` are also attached to every GitHub Release and can be installed directly with `dpkg -i` as a fallback.
 
 ### From source
 
