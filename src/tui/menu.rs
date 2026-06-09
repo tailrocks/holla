@@ -179,7 +179,7 @@ impl Menu {
         // ── System ───────────────────────────────────────────────────────
         let mut system_actions: Vec<Action> = Vec::new();
 
-        if probe.brew || probe.mise || probe.amp {
+        if probe.brew || probe.mise || probe.amp || probe.omz {
             system_actions.push(Action {
                 label: "upgrade: everything".into(),
                 description: "Upgrade all detected tools in parallel".into(),
@@ -191,13 +191,13 @@ impl Menu {
             system_actions.push(Action {
                 label: "upgrade: brew packages".into(),
                 description: "brew update && brew upgrade".into(),
-                preview: "$ brew update\n$ brew upgrade\n$ brew cleanup".into(),
+                preview: "$ brew update\n$ brew upgrade --greedy\n$ brew cleanup\n$ brew autoremove\n$ brew doctor".into(),
                 handler: Box::new(|| Box::pin(crate::commands::upgrade::run_brew())),
             });
             system_actions.push(Action {
                 label: "upgrade: brew casks".into(),
                 description: "Upgrade GUI apps via Homebrew".into(),
-                preview: "$ brew upgrade --cask --greedy".into(),
+                preview: "$ brew update\n$ brew upgrade --cask --greedy\n$ brew cleanup\n$ brew autoremove\n$ brew doctor".into(),
                 handler: Box::new(|| Box::pin(crate::commands::upgrade::run_brew_casks())),
             });
         }
@@ -215,6 +215,14 @@ impl Menu {
                 description: "Upgrade Amp CLI".into(),
                 preview: "$ amp update".into(),
                 handler: Box::new(|| Box::pin(crate::commands::upgrade::run_amp())),
+            });
+        }
+        if probe.omz {
+            system_actions.push(Action {
+                label: "upgrade: oh-my-zsh".into(),
+                description: "Update oh-my-zsh to latest version".into(),
+                preview: "$ omz update".into(),
+                handler: Box::new(|| Box::pin(crate::commands::upgrade::run_omz())),
             });
         }
         if probe.docker {
@@ -254,10 +262,10 @@ impl Menu {
 
 fn build_upgrade_preview(probe: &Probe) -> String {
     let mut lines = vec!["Runs in parallel:".to_string()];
+    if probe.omz     { lines.push("  $ omz update".into()); }
     if probe.mise    { lines.push("  $ mise upgrade".into()); }
     if probe.amp     { lines.push("  $ amp update".into()); }
-    if probe.brew    { lines.push("  $ brew upgrade".into()); }
-    if probe.brew    { lines.push("  $ brew upgrade --cask --greedy".into()); }
+    if probe.brew    { lines.push("  $ brew update && brew upgrade --greedy && brew cleanup && brew autoremove && brew doctor".into()); }
     lines.join("\n")
 }
 

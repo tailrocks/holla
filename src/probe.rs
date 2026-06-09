@@ -17,6 +17,7 @@ pub struct Probe {
     pub gradle: bool,
     pub mise: bool,
     pub amp: bool,
+    pub omz: bool,
     pub idea: bool,
 
     // current folder context
@@ -40,6 +41,7 @@ impl Probe {
         let gradle = which("gradle").is_ok();
         let mise = which("mise").is_ok();
         let amp = which("amp").is_ok();
+        let omz = which("omz").is_ok();
         let idea = which("idea").is_ok();
 
         let in_git_repo = Path::new(".git").exists();
@@ -69,6 +71,7 @@ impl Probe {
             gradle,
             mise,
             amp,
+            omz,
             idea,
             in_git_repo,
             has_mise_toml,
