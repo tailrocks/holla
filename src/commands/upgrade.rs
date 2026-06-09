@@ -17,7 +17,7 @@ pub async fn run_all() -> anyhow::Result<()> {
         tasks.push(TaskDef::new(
             "brew upgrade",
             "sh",
-            &["-c", "brew update && brew upgrade --greedy && brew cleanup && brew autoremove && brew doctor"],
+            &["-c", "brew update && yes | brew upgrade --greedy && brew cleanup && brew autoremove && brew doctor"],
         ));
     }
     run_parallel_tasks(tasks).await
@@ -26,7 +26,7 @@ pub async fn run_all() -> anyhow::Result<()> {
 pub async fn run_brew() -> anyhow::Result<()> {
     run_tasks(vec![
         TaskDef::new("brew update", "brew", &["update"]),
-        TaskDef::new("brew upgrade", "brew", &["upgrade", "--greedy"]),
+        TaskDef::new("brew upgrade", "sh", &["-c", "yes | brew upgrade --greedy"]),
         TaskDef::new("brew cleanup", "brew", &["cleanup"]),
         TaskDef::new("brew autoremove", "brew", &["autoremove"]),
         TaskDef::new("brew doctor", "brew", &["doctor"]),
@@ -37,7 +37,7 @@ pub async fn run_brew() -> anyhow::Result<()> {
 pub async fn run_brew_casks() -> anyhow::Result<()> {
     run_tasks(vec![
         TaskDef::new("brew update", "brew", &["update"]),
-        TaskDef::new("brew upgrade casks", "brew", &["upgrade", "--cask", "--greedy"]),
+        TaskDef::new("brew upgrade casks", "sh", &["-c", "yes | brew upgrade --cask --greedy"]),
         TaskDef::new("brew cleanup", "brew", &["cleanup"]),
         TaskDef::new("brew autoremove", "brew", &["autoremove"]),
         TaskDef::new("brew doctor", "brew", &["doctor"]),
