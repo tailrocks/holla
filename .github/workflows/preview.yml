@@ -89,7 +89,7 @@ jobs:
           while IFS= read -r path; do
             [ -z "$path" ] && continue
             case "$path" in
-              .github/workflows/preview.yml|Cargo.toml|Cargo.lock|rust-toolchain.toml|build.rs|src/**)
+              .github/workflows/preview.yml|Cargo.toml|Cargo.lock|build.rs|src/**)
                 source=true
                 ;;
             esac
@@ -123,7 +123,7 @@ jobs:
           ref: ${{ needs.source-changed.outputs.sha }}
 
       - id: sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbe1acd0f89a2696 # v0.0.10
         continue-on-error: true
         env:
           SCCACHE_GHA_ENABLED: "true"
@@ -197,6 +197,28 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Verify source SHA is on main
+        if: github.event_name == 'workflow_run'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FULL_SHA: ${{ needs.source-changed.outputs.sha }}
+        run: |
+          compare_status=$(
+            curl -fsSL \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/compare/${FULL_SHA}...main" |
+              jq -er '.status'
+          )
+
+          case "$compare_status" in
+            identical|ahead) ;;
+            *)
+              echo "::error::source SHA ${FULL_SHA} is not on main (compare status: ${compare_status})"
+              exit 1
+              ;;
+          esac
 
       - name: Compute preview metadata
         id: meta
@@ -280,6 +302,20 @@ jobs:
           token: ${{ secrets.GH_HOLLA_HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
+      - name: Verify preview alias
+        run: |
+          test -L homebrew-tap/Aliases/holla@preview
+          test "$(readlink homebrew-tap/Aliases/holla@preview)" = "../Formula/holla-preview.rb"
+
+      - name: Extract previous preview SHA
+        id: prev
+        run: |
+          old_sha=$(
+            sed -n 's|^[[:space:]]*# source-sha: \([0-9a-f]\{40\}\)$|\1|p' \
+              homebrew-tap/Formula/holla-preview.rb | head -1
+          )
+          echo "old_sha=${old_sha}" >> "$GITHUB_OUTPUT"
+
       - name: Rewrite preview formula
         env:
           VERSION: ${{ steps.meta.outputs.version }}
@@ -331,14 +367,45 @@ jobs:
           end
           EOF
 
-      - name: Ensure preview alias
-        working-directory: homebrew-tap
+      - name: Verify preview formula downloads
         run: |
-          mkdir -p Aliases
-          alias_link="Aliases/holla@preview"
-          if [ ! -L "$alias_link" ] || [ "$(readlink "$alias_link")" != "../Formula/holla-preview.rb" ]; then
-            ln -sf ../Formula/holla-preview.rb "$alias_link"
-          fi
+          set -euo pipefail
+          while IFS= read -r url; do
+            echo "Verifying $url"
+            curl -fsIL --retry 3 --retry-all-errors --max-time 30 "$url" >/dev/null
+          done < <(
+            sed -n 's|^[[:space:]]*url "\(https://github.com/tailrocks/holla/releases/download/preview/[^"]*\)".*$|\1|p' \
+              homebrew-tap/Formula/holla-preview.rb
+          )
+
+      - name: Build PR body
+        id: pr_body
+        env:
+          OLD_SHA: ${{ steps.prev.outputs.old_sha }}
+          NEW_SHA: ${{ steps.meta.outputs.full_sha }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          body_file="${RUNNER_TEMP}/pr-body.md"
+          {
+            printf 'Automated preview formula update for **holla@preview %s**.\n\n' "$VERSION"
+            printf -- '- Source: [`%s`](https://github.com/tailrocks/holla/commit/%s)\n' \
+              "${NEW_SHA:0:7}" "$NEW_SHA"
+            if [ -n "$OLD_SHA" ] && [ "$OLD_SHA" != "$NEW_SHA" ]; then
+              printf -- '- Previous: [`%s`](https://github.com/tailrocks/holla/commit/%s)\n' \
+                "${OLD_SHA:0:7}" "$OLD_SHA"
+              printf -- '- [Full diff](https://github.com/tailrocks/holla/compare/%s...%s)\n' \
+                "$OLD_SHA" "$NEW_SHA"
+            fi
+            printf '\n## Commits\n\n'
+            if [ -n "$OLD_SHA" ] \
+               && git -C "${GITHUB_WORKSPACE}" rev-parse --verify --quiet "${OLD_SHA}^{commit}" >/dev/null; then
+              git -C "${GITHUB_WORKSPACE}" log --pretty=format:'- %s (%h)' "${OLD_SHA}..${NEW_SHA}"
+              printf '\n'
+            else
+              printf '_No prior preview SHA found; commit range unavailable._\n'
+            fi
+          } > "$body_file"
+          echo "body_file=$body_file" >> "$GITHUB_OUTPUT"
 
       - name: Open and merge PR for tap update
         working-directory: homebrew-tap
@@ -346,8 +413,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_HOLLA_HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.meta.outputs.version }}
           SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+          PR_BODY_FILE: ${{ steps.pr_body.outputs.body_file }}
         run: |
-          git add Formula/holla-preview.rb Aliases/holla@preview
+          git add Formula/holla-preview.rb
           if git diff --cached --quiet --exit-code; then
             echo "Preview formula already up to date"
             exit 0
@@ -358,17 +426,10 @@ jobs:
           git switch -c "$branch"
           git commit -m "holla@preview ${VERSION}"
           git push -u origin "$branch"
-          if pr_url=$(gh pr create \
+          pr_url=$(gh pr create \
             --title "holla@preview ${VERSION}" \
-            --body "Automated preview formula update." \
+            --body-file "$PR_BODY_FILE" \
             --base main \
-            --head "$branch" 2>&1); then
-            echo "Opened PR: $pr_url"
-            gh pr merge "$pr_url" --squash --delete-branch
-          else
-            echo "::warning::PR creation failed ($pr_url), falling back to direct push"
-            git checkout main
-            git merge "$branch" --ff-only
-            git push
-            git push origin --delete "$branch" || true
-          fi
+            --head "$branch")
+          echo "Opened PR: $pr_url"
+          gh pr merge "$pr_url" --squash --delete-branch
