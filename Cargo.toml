@@ -1,6 +1,6 @@
 [package]
 name = "holla-cli"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "Adaptive dev environment CLI — adapts to what you have installed"
 license = "Apache-2.0"
