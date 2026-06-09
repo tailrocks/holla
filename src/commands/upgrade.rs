@@ -4,6 +4,9 @@ use crate::tui::{TaskDef, run_parallel_tasks, run_tasks};
 pub async fn run_all() -> anyhow::Result<()> {
     let probe = Probe::run();
     let mut tasks = Vec::new();
+    if probe.omz {
+        tasks.push(TaskDef::new("oh-my-zsh upgrade", "omz", &["update"]));
+    }
     if probe.mise {
         tasks.push(TaskDef::new("mise upgrade", "mise", &["upgrade"]));
     }
@@ -11,8 +14,11 @@ pub async fn run_all() -> anyhow::Result<()> {
         tasks.push(TaskDef::new("amp update", "amp", &["update"]));
     }
     if probe.brew {
-        tasks.push(TaskDef::new("brew upgrade", "brew", &["upgrade"]));
-        tasks.push(TaskDef::new("brew cask upgrade", "brew", &["upgrade", "--cask", "--greedy"]));
+        tasks.push(TaskDef::new(
+            "brew upgrade",
+            "sh",
+            &["-c", "brew update && brew upgrade --greedy && brew cleanup && brew autoremove && brew doctor"],
+        ));
     }
     run_parallel_tasks(tasks).await
 }
@@ -20,8 +26,10 @@ pub async fn run_all() -> anyhow::Result<()> {
 pub async fn run_brew() -> anyhow::Result<()> {
     run_tasks(vec![
         TaskDef::new("brew update", "brew", &["update"]),
-        TaskDef::new("brew upgrade", "brew", &["upgrade"]),
+        TaskDef::new("brew upgrade", "brew", &["upgrade", "--greedy"]),
         TaskDef::new("brew cleanup", "brew", &["cleanup"]),
+        TaskDef::new("brew autoremove", "brew", &["autoremove"]),
+        TaskDef::new("brew doctor", "brew", &["doctor"]),
     ])
     .await
 }
@@ -31,6 +39,8 @@ pub async fn run_brew_casks() -> anyhow::Result<()> {
         TaskDef::new("brew update", "brew", &["update"]),
         TaskDef::new("brew upgrade casks", "brew", &["upgrade", "--cask", "--greedy"]),
         TaskDef::new("brew cleanup", "brew", &["cleanup"]),
+        TaskDef::new("brew autoremove", "brew", &["autoremove"]),
+        TaskDef::new("brew doctor", "brew", &["doctor"]),
     ])
     .await
 }
@@ -41,4 +51,8 @@ pub async fn run_mise() -> anyhow::Result<()> {
 
 pub async fn run_amp() -> anyhow::Result<()> {
     run_tasks(vec![TaskDef::new("amp update", "amp", &["update"])]).await
+}
+
+pub async fn run_omz() -> anyhow::Result<()> {
+    run_tasks(vec![TaskDef::new("oh-my-zsh upgrade", "omz", &["update"])]).await
 }
