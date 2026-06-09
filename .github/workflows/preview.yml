@@ -358,10 +358,17 @@ jobs:
           git switch -c "$branch"
           git commit -m "holla@preview ${VERSION}"
           git push -u origin "$branch"
-          pr_url=$(gh pr create \
+          if pr_url=$(gh pr create \
             --title "holla@preview ${VERSION}" \
             --body "Automated preview formula update." \
             --base main \
-            --head "$branch")
-          echo "Opened PR: $pr_url"
-          gh pr merge "$pr_url" --squash --delete-branch
+            --head "$branch" 2>&1); then
+            echo "Opened PR: $pr_url"
+            gh pr merge "$pr_url" --squash --delete-branch
+          else
+            echo "::warning::PR creation failed ($pr_url), falling back to direct push"
+            git checkout main
+            git merge "$branch" --ff-only
+            git push
+            git push origin --delete "$branch" || true
+          fi
