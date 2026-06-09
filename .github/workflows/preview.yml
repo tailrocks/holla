@@ -331,14 +331,37 @@ jobs:
           end
           EOF
 
-      - name: Push formula update
+      - name: Ensure preview alias
+        working-directory: homebrew-tap
+        run: |
+          mkdir -p Aliases
+          alias_link="Aliases/holla@preview"
+          if [ ! -L "$alias_link" ] || [ "$(readlink "$alias_link")" != "../Formula/holla-preview.rb" ]; then
+            ln -sf ../Formula/holla-preview.rb "$alias_link"
+          fi
+
+      - name: Open and merge PR for tap update
         working-directory: homebrew-tap
         env:
+          GH_TOKEN: ${{ secrets.GH_HOLLA_HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.meta.outputs.version }}
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
         run: |
+          git add Formula/holla-preview.rb Aliases/holla@preview
+          if git diff --cached --quiet --exit-code; then
+            echo "Preview formula already up to date"
+            exit 0
+          fi
+          branch="preview/formula-${SHORT_SHA}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/holla-preview.rb
-          git diff --cached --quiet --exit-code && echo "Formula already up to date" && exit 0
+          git switch -c "$branch"
           git commit -m "holla@preview ${VERSION}"
-          git push
+          git push -u origin "$branch"
+          pr_url=$(gh pr create \
+            --title "holla@preview ${VERSION}" \
+            --body "Automated preview formula update." \
+            --base main \
+            --head "$branch")
+          echo "Opened PR: $pr_url"
+          gh pr merge "$pr_url" --squash --delete-branch
