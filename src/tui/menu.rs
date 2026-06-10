@@ -15,12 +15,14 @@ use std::{io, time::Duration};
 
 use crate::probe::Probe;
 
+/// Boxed future returned by an [`Action`] handler.
+pub type ActionFuture = std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>>>>;
+
 pub struct Action {
     pub label: String,
     pub description: String,
     pub preview: String,
-    pub handler:
-        Box<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>>>>>,
+    pub handler: Box<dyn Fn() -> ActionFuture>,
 }
 
 pub struct Group {
@@ -394,40 +396,40 @@ pub async fn run(menu: Menu) -> anyhow::Result<()> {
             f.render_widget(footer, chunks[2]);
         })?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            match key.code {
+                KeyCode::Char('q') => break None,
+                KeyCode::Up => {
+                    if focus_left {
+                        group_idx = group_idx.saturating_sub(1);
+                        action_idx = 0;
+                    } else {
+                        action_idx = action_idx.saturating_sub(1);
+                    }
                 }
-                match key.code {
-                    KeyCode::Char('q') => break None,
-                    KeyCode::Up => {
-                        if focus_left {
-                            group_idx = group_idx.saturating_sub(1);
-                            action_idx = 0;
-                        } else {
-                            action_idx = action_idx.saturating_sub(1);
-                        }
+                KeyCode::Down => {
+                    if focus_left {
+                        group_idx = (group_idx + 1).min(menu.groups.len().saturating_sub(1));
+                        action_idx = 0;
+                    } else {
+                        action_idx = (action_idx + 1).min(action_count.saturating_sub(1));
                     }
-                    KeyCode::Down => {
-                        if focus_left {
-                            group_idx = (group_idx + 1).min(menu.groups.len().saturating_sub(1));
-                            action_idx = 0;
-                        } else {
-                            action_idx = (action_idx + 1).min(action_count.saturating_sub(1));
-                        }
-                    }
-                    KeyCode::Right | KeyCode::Tab => focus_left = false,
-                    KeyCode::Left => focus_left = true,
-                    KeyCode::Enter => {
-                        if focus_left {
-                            focus_left = false;
-                        } else {
-                            break Some((group_idx, action_idx));
-                        }
-                    }
-                    _ => {}
                 }
+                KeyCode::Right | KeyCode::Tab => focus_left = false,
+                KeyCode::Left => focus_left = true,
+                KeyCode::Enter => {
+                    if focus_left {
+                        focus_left = false;
+                    } else {
+                        break Some((group_idx, action_idx));
+                    }
+                }
+                _ => {}
             }
         }
     };
