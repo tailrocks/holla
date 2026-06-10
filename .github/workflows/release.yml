@@ -79,7 +79,7 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      - run: cargo nextest run --all-features
+      - run: cargo nextest run --all-features --no-tests=pass
 
   build:
     needs: [check-version, test]

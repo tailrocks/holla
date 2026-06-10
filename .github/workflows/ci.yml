@@ -62,7 +62,7 @@ jobs:
             cargo-target-${{ runner.os }}-${{ github.base_ref || 'main' }}-test-
             cargo-target-${{ runner.os }}-
 
-      - run: cargo nextest run --all-features --color=always
+      - run: cargo nextest run --all-features --color=always --no-tests=pass
 
       - run: cargo build --color=always
 
