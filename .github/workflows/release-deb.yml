@@ -60,7 +60,7 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - id: sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e # v0.0.10
         continue-on-error: true
         env:
           SCCACHE_GHA_ENABLED: "true"
@@ -73,7 +73,7 @@ jobs:
 
       - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
         with:
-          install_args: "rust zig cargo:cargo-zigbuild"
+          install_args: "rust zig cargo:cargo-zigbuild cargo:cargo-deb"
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - run: rustup target add ${{ matrix.target }}
@@ -84,6 +84,7 @@ jobs:
           path: |
             ~/.cargo/registry/cache
             ~/.cargo/registry/index
+            ~/.cargo/registry/src
             ~/.cargo/git/db
           key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
@@ -91,9 +92,6 @@ jobs:
 
       - name: Install mold linker
         uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-
-      - name: Install cargo-deb
-        run: mise exec -- cargo install cargo-deb --locked
 
       - name: Build
         run: |
@@ -120,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
-          DEB_SRC=$(ls target/${{ matrix.target }}/debian/holla_*.deb | head -1)
+          DEB_SRC=$(find "target/${{ matrix.target }}/debian" -maxdepth 1 -name 'holla_*.deb' | head -1)
           DEB_DST="holla-${VERSION}-${{ matrix.target }}.deb"
           cp "$DEB_SRC" "$DEB_DST"
           sha256sum "$DEB_DST" | awk '{print $1}' > "$DEB_DST.sha256"

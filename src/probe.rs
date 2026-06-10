@@ -45,13 +45,11 @@ impl Probe {
         let idea = which("idea").is_ok();
 
         let in_git_repo = Path::new(".git").exists();
-        let has_mise_toml =
-            Path::new("mise.toml").exists() || Path::new(".mise.toml").exists();
-        let has_docker_compose =
-            Path::new("docker-compose.yml").exists()
-                || Path::new("docker-compose.yaml").exists()
-                || Path::new("compose.yml").exists()
-                || Path::new("compose.yaml").exists();
+        let has_mise_toml = Path::new("mise.toml").exists() || Path::new(".mise.toml").exists();
+        let has_docker_compose = Path::new("docker-compose.yml").exists()
+            || Path::new("docker-compose.yaml").exists()
+            || Path::new("compose.yml").exists()
+            || Path::new("compose.yaml").exists();
         let has_gradle_build =
             Path::new("build.gradle").exists() || Path::new("build.gradle.kts").exists();
         let has_idea_dir = Path::new(".idea").exists();
@@ -106,7 +104,11 @@ fn discover_mise_tasks() -> Vec<MiseTask> {
                 .trim_start_matches('#')
                 .trim()
                 .to_owned();
-            if name.is_empty() { None } else { Some(MiseTask { name, description }) }
+            if name.is_empty() {
+                None
+            } else {
+                Some(MiseTask { name, description })
+            }
         })
         .collect()
 }

@@ -2,9 +2,7 @@ mod commands;
 mod probe;
 mod tui;
 
-use anyhow;
 use clap::Command;
-use tokio;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

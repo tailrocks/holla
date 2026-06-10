@@ -174,30 +174,30 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
             f.render_widget(paragraph, chunks[1]);
         })?;
 
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            let count = running.lock().unwrap().len();
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Left | KeyCode::Char('h') => {
+                    selected = selected.saturating_sub(1);
+                    scroll = 0;
                 }
-                let count = running.lock().unwrap().len();
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Left | KeyCode::Char('h') => {
-                        selected = selected.saturating_sub(1);
-                        scroll = 0;
-                    }
-                    KeyCode::Right | KeyCode::Char('l') => {
-                        selected = (selected + 1).min(count.saturating_sub(1));
-                        scroll = 0;
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        scroll = scroll.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        scroll += 1;
-                    }
-                    _ => {}
+                KeyCode::Right | KeyCode::Char('l') => {
+                    selected = (selected + 1).min(count.saturating_sub(1));
+                    scroll = 0;
                 }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    scroll = scroll.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    scroll += 1;
+                }
+                _ => {}
             }
         }
     }

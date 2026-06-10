@@ -19,7 +19,13 @@ pub async fn push_all() -> anyhow::Result<()> {
 pub async fn status_all() -> anyhow::Result<()> {
     let tasks = find_git_repos()
         .into_iter()
-        .map(|repo| TaskDef::new(format!("status — {repo}"), "git", &["-C", &repo, "status", "--short"]))
+        .map(|repo| {
+            TaskDef::new(
+                format!("status — {repo}"),
+                "git",
+                &["-C", &repo, "status", "--short"],
+            )
+        })
         .collect();
     run_tasks(tasks).await
 }
