@@ -37,7 +37,11 @@ pub async fn run_brew() -> anyhow::Result<()> {
 pub async fn run_brew_casks() -> anyhow::Result<()> {
     run_tasks(vec![
         TaskDef::new("brew update", "brew", &["update"]),
-        TaskDef::new("brew upgrade casks", "brew", &["upgrade", "--cask", "--greedy", "--yes"]),
+        TaskDef::new(
+            "brew upgrade casks",
+            "brew",
+            &["upgrade", "--cask", "--greedy", "--yes"],
+        ),
         TaskDef::new("brew cleanup", "brew", &["cleanup"]),
         TaskDef::new("brew autoremove", "brew", &["autoremove"]),
         TaskDef::new("brew doctor", "brew", &["doctor"]),

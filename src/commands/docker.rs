@@ -36,9 +36,16 @@ pub async fn clean() -> anyhow::Result<()> {
         TaskDef {
             label: "Removing images".into(),
             program: "sh".into(),
-            args: vec!["-c".into(), "docker rmi --force $(docker images -qa) 2>/dev/null || true".into()],
+            args: vec![
+                "-c".into(),
+                "docker rmi --force $(docker images -qa) 2>/dev/null || true".into(),
+            ],
         },
-        TaskDef::new("Pruning networks", "docker", &["network", "prune", "--force"]),
+        TaskDef::new(
+            "Pruning networks",
+            "docker",
+            &["network", "prune", "--force"],
+        ),
         TaskDef::new("Pruning system", "docker", &["system", "prune", "--force"]),
         TaskDef::new("Pruning volumes", "docker", &["volume", "prune", "--force"]),
     ])

@@ -19,7 +19,8 @@ pub struct Action {
     pub label: String,
     pub description: String,
     pub preview: String,
-    pub handler: Box<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>>>>>,
+    pub handler:
+        Box<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>>>>>,
 }
 
 pub struct Group {
@@ -128,7 +129,9 @@ impl Menu {
             current_actions.push(Action {
                 label: "idea: clean".into(),
                 description: "Remove .idea dirs and *.iml files".into(),
-                preview: "find . -name .idea -type d ... | rm -rf\nfind . -name '*.iml' ... | rm -f".into(),
+                preview:
+                    "find . -name .idea -type d ... | rm -rf\nfind . -name '*.iml' ... | rm -f"
+                        .into(),
                 handler: Box::new(|| Box::pin(crate::commands::idea::clean())),
             });
         }
@@ -150,13 +153,19 @@ impl Menu {
                 actions: vec![
                     Action {
                         label: "git: pull all repos".into(),
-                        description: format!("Pull {} repos in parallel", probe.parent_git_repos.len()),
+                        description: format!(
+                            "Pull {} repos in parallel",
+                            probe.parent_git_repos.len()
+                        ),
                         preview: format!("Repos: {repo_list}\n\n$ git pull (parallel)"),
                         handler: Box::new(|| Box::pin(crate::commands::git::pull_all())),
                     },
                     Action {
                         label: "git: push all repos".into(),
-                        description: format!("Push {} repos in parallel", probe.parent_git_repos.len()),
+                        description: format!(
+                            "Push {} repos in parallel",
+                            probe.parent_git_repos.len()
+                        ),
                         preview: format!("Repos: {repo_list}\n\n$ git push (parallel)"),
                         handler: Box::new(|| Box::pin(crate::commands::git::push_all())),
                     },
@@ -169,7 +178,9 @@ impl Menu {
                     Action {
                         label: "git: push all remotes".into(),
                         description: "Push every repo to origin + gitlab".into(),
-                        preview: format!("Repos: {repo_list}\n\n$ git push origin\n$ git push gitlab"),
+                        preview: format!(
+                            "Repos: {repo_list}\n\n$ git push origin\n$ git push gitlab"
+                        ),
                         handler: Box::new(|| Box::pin(crate::commands::git::push_all_remotes())),
                     },
                 ],
@@ -229,7 +240,8 @@ impl Menu {
             system_actions.push(Action {
                 label: "docker: stop all containers".into(),
                 description: "Stop and remove all running containers".into(),
-                preview: "$ docker ps -qa | xargs docker stop\n$ docker ps -qa | xargs docker rm".into(),
+                preview: "$ docker ps -qa | xargs docker stop\n$ docker ps -qa | xargs docker rm"
+                    .into(),
                 handler: Box::new(|| Box::pin(crate::commands::docker::stop_all())),
             });
             system_actions.push(Action {
@@ -262,10 +274,18 @@ impl Menu {
 
 fn build_upgrade_preview(probe: &Probe) -> String {
     let mut lines = vec!["Runs in parallel:".to_string()];
-    if probe.omz     { lines.push("  $ omz update".into()); }
-    if probe.mise    { lines.push("  $ mise upgrade".into()); }
-    if probe.amp     { lines.push("  $ amp update".into()); }
-    if probe.brew    { lines.push("  $ brew update && brew upgrade --greedy && brew cleanup && brew autoremove && brew doctor".into()); }
+    if probe.omz {
+        lines.push("  $ omz update".into());
+    }
+    if probe.mise {
+        lines.push("  $ mise upgrade".into());
+    }
+    if probe.amp {
+        lines.push("  $ amp update".into());
+    }
+    if probe.brew {
+        lines.push("  $ brew update && brew upgrade --greedy && brew cleanup && brew autoremove && brew doctor".into());
+    }
     lines.join("\n")
 }
 
@@ -320,7 +340,12 @@ pub async fn run(menu: Menu) -> anyhow::Result<()> {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default();
             let header = Paragraph::new(Line::from(vec![
-                Span::styled(" holla ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " holla ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(&cwd, Style::default().fg(Color::DarkGray)),
             ]))
             .block(Block::default().borders(Borders::ALL));
@@ -336,8 +361,22 @@ pub async fn run(menu: Menu) -> anyhow::Result<()> {
                 ])
                 .split(chunks[1]);
 
-            render_groups(f, body[0], groups, group_idx, focus_left, &mut group_state.clone());
-            render_actions(f, body[1], current_group, action_idx, !focus_left, &mut action_state.clone());
+            render_groups(
+                f,
+                body[0],
+                groups,
+                group_idx,
+                focus_left,
+                &mut group_state.clone(),
+            );
+            render_actions(
+                f,
+                body[1],
+                current_group,
+                action_idx,
+                !focus_left,
+                &mut action_state.clone(),
+            );
             render_preview(f, body[2], current_group, action_idx);
 
             // footer
@@ -491,7 +530,9 @@ fn render_preview(f: &mut ratatui::Frame, area: Rect, group: &Group, selected: u
     let text = vec![
         Line::from(Span::styled(
             &action.label,
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::raw(""),
         Line::from(Span::styled(
@@ -501,18 +542,18 @@ fn render_preview(f: &mut ratatui::Frame, area: Rect, group: &Group, selected: u
         Line::raw(""),
         Line::from(Span::styled(
             "Command",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::UNDERLINED),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::UNDERLINED),
         )),
     ]
     .into_iter()
-    .chain(
-        action.preview.lines().map(|l| {
-            Line::from(Span::styled(
-                l.to_owned(),
-                Style::default().fg(Color::Yellow),
-            ))
-        }),
-    )
+    .chain(action.preview.lines().map(|l| {
+        Line::from(Span::styled(
+            l.to_owned(),
+            Style::default().fg(Color::Yellow),
+        ))
+    }))
     .collect::<Vec<_>>();
 
     let paragraph = Paragraph::new(text)
