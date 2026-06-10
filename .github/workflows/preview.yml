@@ -148,6 +148,7 @@ jobs:
           path: |
             ~/.cargo/registry/cache
             ~/.cargo/registry/index
+            ~/.cargo/registry/src
             ~/.cargo/git/db
           key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
@@ -229,6 +230,7 @@ jobs:
           base_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           base_version=${base_version%-dev}
           short_sha=$(printf '%s' "$FULL_SHA" | cut -c1-7)
+          # shellcheck disable=SC2016 # literal GraphQL $variables, not shell expansion
           graphql_query='query($owner: String!, $name: String!, $oid: GitObjectID!) { repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit { history(first: 1) { totalCount } } } } }'
           commit_count=$(
             jq -cn \
@@ -253,10 +255,12 @@ jobs:
       - name: Read platform SHA256s
         id: shas
         run: |
-          echo "arm64_macos=$(cat artifacts/holla-aarch64-apple-darwin.tar.gz.sha256)" >> "$GITHUB_OUTPUT"
-          echo "x86_macos=$(cat artifacts/holla-x86_64-apple-darwin.tar.gz.sha256)" >> "$GITHUB_OUTPUT"
-          echo "arm64_linux=$(cat artifacts/holla-aarch64-unknown-linux-gnu.tar.gz.sha256)" >> "$GITHUB_OUTPUT"
-          echo "x86_linux=$(cat artifacts/holla-x86_64-unknown-linux-gnu.tar.gz.sha256)" >> "$GITHUB_OUTPUT"
+          {
+            echo "arm64_macos=$(cat artifacts/holla-aarch64-apple-darwin.tar.gz.sha256)"
+            echo "x86_macos=$(cat artifacts/holla-x86_64-apple-darwin.tar.gz.sha256)"
+            echo "arm64_linux=$(cat artifacts/holla-aarch64-unknown-linux-gnu.tar.gz.sha256)"
+            echo "x86_linux=$(cat artifacts/holla-x86_64-unknown-linux-gnu.tar.gz.sha256)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Publish preview GitHub Release
         env:
@@ -388,9 +392,11 @@ jobs:
           body_file="${RUNNER_TEMP}/pr-body.md"
           {
             printf 'Automated preview formula update for **holla@preview %s**.\n\n' "$VERSION"
+            # shellcheck disable=SC2016 # literal markdown backticks, not shell expansion
             printf -- '- Source: [`%s`](https://github.com/tailrocks/holla/commit/%s)\n' \
               "${NEW_SHA:0:7}" "$NEW_SHA"
             if [ -n "$OLD_SHA" ] && [ "$OLD_SHA" != "$NEW_SHA" ]; then
+              # shellcheck disable=SC2016 # literal markdown backticks, not shell expansion
               printf -- '- Previous: [`%s`](https://github.com/tailrocks/holla/commit/%s)\n' \
                 "${OLD_SHA:0:7}" "$OLD_SHA"
               printf -- '- [Full diff](https://github.com/tailrocks/holla/compare/%s...%s)\n' \

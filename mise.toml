@@ -1,4 +1,6 @@
 [tools]
+"cargo:cargo-deb" = "3.7.0"
+"cargo:cargo-nextest" = "0.9.137"
 "cargo:cargo-zigbuild" = "0.22.3"
 zig = "0.16.0"
 

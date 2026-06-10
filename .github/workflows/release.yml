@@ -64,7 +64,7 @@ jobs:
 
       - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
         with:
-          install_args: "rust"
+          install_args: "rust cargo:cargo-nextest"
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Cargo registry
@@ -73,12 +73,13 @@ jobs:
           path: |
             ~/.cargo/registry/cache
             ~/.cargo/registry/index
+            ~/.cargo/registry/src
             ~/.cargo/git/db
           key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      - run: cargo test --color=always
+      - run: cargo nextest run --all-features
 
   build:
     needs: [check-version, test]
@@ -129,6 +130,7 @@ jobs:
           path: |
             ~/.cargo/registry/cache
             ~/.cargo/registry/index
+            ~/.cargo/registry/src
             ~/.cargo/git/db
           key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
@@ -190,10 +192,12 @@ jobs:
         id: shas
         run: |
           read_sha() { awk '{print $1}' "artifacts/$1.sha256"; }
-          echo "arm64_macos=$(read_sha "holla-${VERSION}-aarch64-apple-darwin.tar.gz")" >> "$GITHUB_OUTPUT"
-          echo "x86_macos=$(read_sha "holla-${VERSION}-x86_64-apple-darwin.tar.gz")" >> "$GITHUB_OUTPUT"
-          echo "arm64_linux=$(read_sha "holla-${VERSION}-aarch64-unknown-linux-gnu.tar.gz")" >> "$GITHUB_OUTPUT"
-          echo "x86_linux=$(read_sha "holla-${VERSION}-x86_64-unknown-linux-gnu.tar.gz")" >> "$GITHUB_OUTPUT"
+          {
+            echo "arm64_macos=$(read_sha "holla-${VERSION}-aarch64-apple-darwin.tar.gz")"
+            echo "x86_macos=$(read_sha "holla-${VERSION}-x86_64-apple-darwin.tar.gz")"
+            echo "arm64_linux=$(read_sha "holla-${VERSION}-aarch64-unknown-linux-gnu.tar.gz")"
+            echo "x86_linux=$(read_sha "holla-${VERSION}-x86_64-unknown-linux-gnu.tar.gz")"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         env:
