@@ -73,10 +73,16 @@ jobs:
 
       - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
         with:
-          install_args: "rust zig cargo:cargo-zigbuild cargo:cargo-deb"
+          install_args: "rust zig cargo:cargo-zigbuild"
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - run: rustup target add ${{ matrix.target }}
+
+      - name: Install cargo-deb
+        # Pinned via mise.toml (cargo:cargo-deb); the explicit `mise install`
+        # registers the shim version so `cargo deb` resolves (install_args
+        # alone left the shim with no active version — same pattern velnor uses).
+        run: mise install 'cargo:cargo-deb' && mise exec -- cargo-deb --version
 
       - name: Cache Cargo registry
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -113,7 +119,7 @@ jobs:
           # (profile.release strip=true); the host `strip` cannot process a
           # cross-built foreign-arch ELF, so cargo-deb's own strip pass must
           # be skipped or the arm64 build fails. (Same fix as velnor.)
-          mise exec -- cargo deb --target ${{ matrix.target }} --no-build --no-strip --deb-version "$VERSION"
+          cargo deb --target ${{ matrix.target }} --no-build --no-strip --deb-version "$VERSION"
           ls -la target/${{ matrix.target }}/debian/*.deb
 
       - name: Stage .deb for artifacts
