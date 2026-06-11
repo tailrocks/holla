@@ -113,7 +113,7 @@ jobs:
           # (profile.release strip=true); the host `strip` cannot process a
           # cross-built foreign-arch ELF, so cargo-deb's own strip pass must
           # be skipped or the arm64 build fails. (Same fix as velnor.)
-          cargo deb --target ${{ matrix.target }} --no-build --no-strip --deb-version "$VERSION"
+          mise exec -- cargo deb --target ${{ matrix.target }} --no-build --no-strip --deb-version "$VERSION"
           ls -la target/${{ matrix.target }}/debian/*.deb
 
       - name: Stage .deb for artifacts
