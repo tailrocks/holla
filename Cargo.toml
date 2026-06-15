@@ -1,6 +1,6 @@
 [package]
 name = "holla-cli"
-version = "1.0.0"
+version = "0.1.0-dev"
 build = "build.rs"
 edition = "2024"
 description = "Adaptive dev environment CLI — adapts to what you have installed"
