@@ -38,6 +38,10 @@ jobs:
             version="${GITHUB_REF#refs/tags/v}"
           else
             version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+            if [[ "$version" == *"-dev"* ]]; then
+              echo "::error::Cannot release a dev version ($version)"
+              exit 1
+            fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -141,6 +145,8 @@ jobs:
         uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
 
       - name: Build
+        env:
+          HOLLA_VERSION_OVERRIDE: ${{ needs.check-version.outputs.version }}
         run: |
           if [ "${{ matrix.zigbuild }}" = "true" ]; then
             cargo zigbuild --release --locked --target ${{ matrix.target }}.2.17

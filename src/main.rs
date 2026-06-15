@@ -7,7 +7,7 @@ use clap::Command;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     Command::new("holla")
-        .version(env!("CARGO_PKG_VERSION"))
+        .version(env!("HOLLA_VERSION"))
         .about("Adaptive dev environment CLI")
         .get_matches();
 
