@@ -43,7 +43,7 @@ Groups appear only when the relevant tool is detected. A machine without Docker 
 
 ```bash
 brew tap tailrocks/holla
-brew install holla
+brew install holla@preview
 ```
 
 ### Debian / Ubuntu (apt)
