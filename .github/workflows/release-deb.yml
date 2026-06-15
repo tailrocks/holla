@@ -95,7 +95,10 @@ jobs:
         uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
 
       - name: Build
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
+          export HOLLA_VERSION_OVERRIDE="${TAG#v}"
           if [ "${{ matrix.zigbuild }}" = "true" ]; then
             # Use modern glibc target (no .2.17) because we only target latest Debian
             # for the .deb packages (see previous "latest and greatest Debian only" requirement).
