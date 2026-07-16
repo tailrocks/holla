@@ -18,7 +18,7 @@ impl Provider for FindProvider {
 
 pub(super) fn group() -> GroupSpec {
     GroupSpec {
-        id: "find",
+        id: "find".into(),
         title: "Find".into(),
         actions: vec![ActionSpec::new(
             "find.files",

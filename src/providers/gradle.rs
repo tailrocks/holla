@@ -18,7 +18,7 @@ impl Provider for GradleProvider {
 
 pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
     probe.gradle.then(|| GroupSpec {
-        id: "system",
+        id: "system".into(),
         title: "System".into(),
         actions: vec![ActionSpec::new(
             "gradle.clean-all",

@@ -5,6 +5,7 @@ use ratatui::{
     text::{Line, Span, Text},
 };
 use std::{
+    path::PathBuf,
     process::Stdio,
     sync::{
         Arc, Mutex,
@@ -44,6 +45,7 @@ pub struct TaskDef {
     pub label: String,
     pub program: String,
     pub args: Vec<String>,
+    pub working_directory: Option<PathBuf>,
 }
 
 impl TaskDef {
@@ -52,8 +54,15 @@ impl TaskDef {
             label: label.into(),
             program: program.into(),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            working_directory: None,
         }
     }
+}
+
+static HEADLESS: AtomicBool = AtomicBool::new(false);
+
+pub fn set_headless(enabled: bool) {
+    HEADLESS.store(enabled, Ordering::Release);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,23 +274,41 @@ static DONE_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[KeyBinding {
 }]);
 
 pub async fn run_tasks(tasks: Vec<TaskDef>) -> anyhow::Result<()> {
+    if HEADLESS.load(Ordering::Acquire) {
+        anyhow::ensure!(run_tasks_headless_print(tasks, false).await, "task failed");
+        return Ok(());
+    }
     run_tui(tasks, false).await
 }
 
 pub async fn run_parallel_tasks(tasks: Vec<TaskDef>) -> anyhow::Result<()> {
+    if HEADLESS.load(Ordering::Acquire) {
+        anyhow::ensure!(run_tasks_headless_print(tasks, true).await, "task failed");
+        return Ok(());
+    }
     run_tui(tasks, true).await
 }
 
 pub(crate) async fn run_tasks_headless(tasks: Vec<TaskDef>) -> bool {
+    run_tasks_headless_inner(tasks, false, false).await
+}
+
+async fn run_tasks_headless_print(tasks: Vec<TaskDef>, parallel: bool) -> bool {
+    run_tasks_headless_inner(tasks, parallel, true).await
+}
+
+async fn run_tasks_headless_inner(tasks: Vec<TaskDef>, parallel: bool, print: bool) -> bool {
     let task_count = tasks.len();
     let (tx, rx) = mpsc::channel();
-    let handles = spawn_tasks(tasks, false, tx);
+    let handles = spawn_tasks(tasks, parallel, tx);
     let mut supervisor = TaskSupervisor::new(handles);
     let success = tokio::task::spawn_blocking(move || {
         let mut completed = vec![false; task_count];
         while let Ok(event) = rx.recv() {
-            if let TaskEvent::Done { task, success } = event {
-                completed[task] = success;
+            match event {
+                TaskEvent::Line { line, .. } if print => println!("{line}"),
+                TaskEvent::Done { task, success } => completed[task] = success,
+                TaskEvent::Started { .. } | TaskEvent::Line { .. } => {}
             }
         }
         completed.into_iter().all(|done| done)
@@ -365,6 +392,9 @@ async fn run_task(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
+    if let Some(directory) = &def.working_directory {
+        command.current_dir(directory);
+    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {

@@ -16,11 +16,13 @@ pub struct ActionSpec {
     pub preview: String,
     pub keywords: Vec<String>,
     pub danger: Danger,
+    pub confirm: bool,
+    pub trust_required: bool,
     pub run: Box<dyn Fn() -> ActionFuture + Send>,
 }
 
 pub struct GroupSpec {
-    pub id: &'static str,
+    pub id: String,
     pub title: String,
     pub actions: Vec<ActionSpec>,
 }
@@ -45,7 +47,27 @@ impl ActionSpec {
                 .map(|keyword| (*keyword).to_owned())
                 .collect(),
             danger,
+            confirm: false,
+            trust_required: false,
             run: Box::new(run),
         }
+    }
+
+    #[must_use]
+    pub fn with_confirmation(mut self, confirm: bool) -> Self {
+        self.confirm = confirm;
+        self
+    }
+
+    #[must_use]
+    pub fn with_keywords(mut self, keywords: Vec<String>) -> Self {
+        self.keywords = keywords;
+        self
+    }
+
+    #[must_use]
+    pub fn with_trust_required(mut self, trust_required: bool) -> Self {
+        self.trust_required = trust_required;
+        self
     }
 }

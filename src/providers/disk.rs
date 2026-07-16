@@ -18,7 +18,7 @@ impl Provider for DiskProvider {
 
 pub(super) fn group() -> GroupSpec {
     GroupSpec {
-        id: "disk",
+        id: "disk".into(),
         title: "Disk usage".into(),
         actions: vec![
             ActionSpec::new(

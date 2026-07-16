@@ -70,7 +70,36 @@ Debian packages (`.deb`) for `amd64` and `arm64` are also attached to every GitH
 holla
 ```
 
-That's it.
+Zero config remains the default. For scripts and tooling:
+
+```bash
+holla list --json
+holla run git.status
+holla doctor
+```
+
+`list --json` emits a versioned `{"v":1,"actions":[...]}` envelope. Headless
+destructive or explicitly confirmed actions require `--yes`.
+
+### Custom actions
+
+Put global actions in `~/.config/holla/actions.toml`, or project actions in
+`.holla.toml`:
+
+```toml
+[[action]]
+id = "team.deploy-staging"
+label = "deploy: staging"
+description = "Deploy current branch to staging"
+command = ["./scripts/deploy.sh", "staging"]
+danger = "mutating"
+keywords = ["deploy", "staging"]
+confirm = true
+```
+
+Commands are argv arrays only; shell strings are rejected. Project actions are
+marked unreviewed until their exact file hash is trusted. Editing the file
+requires review again.
 
 ## License
 

@@ -26,7 +26,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
     let status_repos = probe.child_git_repos.clone();
     let remote_repos = probe.child_git_repos.clone();
     Some(GroupSpec {
-        id: "repos",
+        id: "repos".into(),
         title: "Repos in this folder".into(),
         actions: vec![
             ActionSpec::new(

@@ -25,7 +25,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
 
 fn group_with_preview(probe: &Probe, size_preview: Option<&str>) -> Option<GroupSpec> {
     probe.docker.then(|| GroupSpec {
-        id: "system",
+        id: "system".into(),
         title: "System".into(),
         actions: vec![
             ActionSpec::new(

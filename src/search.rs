@@ -113,7 +113,7 @@ mod tests {
     fn fixtures() -> Vec<GroupSpec> {
         vec![
             GroupSpec {
-                id: "docker",
+                id: "docker".into(),
                 title: "Docker".into(),
                 actions: vec![
                     action("docker.stop", "stop containers", &["cleanup"]),
@@ -121,7 +121,7 @@ mod tests {
                 ],
             },
             GroupSpec {
-                id: "build",
+                id: "build".into(),
                 title: "Build".into(),
                 actions: vec![action("gradle.clean", "gradle clean", &["cleanup"])],
             },
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn remembered_query_is_fixed_top_priority_despite_lower_text_score() {
         let groups = vec![GroupSpec {
-            id: "tools",
+            id: "tools".into(),
             title: "Tools".into(),
             actions: vec![
                 action("strong", "cleanup", &[]),

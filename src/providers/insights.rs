@@ -57,7 +57,7 @@ pub(super) fn group(detected: &[&'static InsightSpec]) -> GroupSpec {
             }),
     );
     GroupSpec {
-        id: "cleanup",
+        id: "cleanup".into(),
         title: "Cleanup".into(),
         actions,
     }

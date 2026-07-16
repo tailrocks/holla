@@ -1,5 +1,6 @@
 pub mod cleanup;
 mod commands;
+mod config;
 pub mod du;
 mod find;
 mod frecency;
@@ -10,14 +11,173 @@ mod providers;
 mod search;
 mod tui;
 
-use clap::Command;
+use clap::{Parser, Subcommand};
+use serde::Serialize;
+use std::{process::ExitCode, time::Instant};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    Command::new("holla")
-        .version(env!("HOLLA_VERSION"))
-        .about("Adaptive dev environment CLI")
-        .get_matches();
+async fn main() -> ExitCode {
+    match run(Cli::parse()).await {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("holla: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    tui::menu::run().await
+#[derive(Parser)]
+#[command(name = "holla", version = env!("HOLLA_VERSION"), about = "Adaptive dev environment CLI")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+#[derive(Subcommand)]
+enum CliCommand {
+    /// List detected actions. JSON is a stable `{"v":1,"actions":[...]}` envelope.
+    List {
+        /// Emit the versioned machine-readable schema.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run one detected action without opening the launcher.
+    Run {
+        action_id: String,
+        /// Confirm destructive, explicitly-confirmed, or untrusted project actions.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Report probes, registry timing, and configuration health.
+    Doctor,
+}
+
+#[derive(Serialize)]
+struct ListEnvelope {
+    v: u8,
+    actions: Vec<ListAction>,
+}
+
+#[derive(Serialize)]
+struct ListAction {
+    id: String,
+    label: String,
+    group: String,
+    danger: &'static str,
+}
+
+async fn run(cli: Cli) -> anyhow::Result<u8> {
+    let Some(command) = cli.command else {
+        tui::menu::run().await?;
+        return Ok(0);
+    };
+    let started = Instant::now();
+    let registry = providers::scan_all();
+    let elapsed = started.elapsed();
+    match command {
+        CliCommand::List { json } => {
+            let actions = list_actions(&registry.groups);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&ListEnvelope { v: 1, actions })?
+                );
+            } else {
+                for action in actions {
+                    println!(
+                        "{:<34} {:<13} {:<20} {}",
+                        action.id, action.danger, action.group, action.label
+                    );
+                }
+            }
+            print_warnings(&registry.warnings);
+            Ok(if registry.warnings.is_empty() { 0 } else { 4 })
+        }
+        CliCommand::Run { action_id, yes } => {
+            let action = registry
+                .groups
+                .iter()
+                .flat_map(|group| &group.actions)
+                .find(|action| action.id == action_id);
+            let Some(action) = action else {
+                eprintln!("holla: unknown action `{action_id}`");
+                return Ok(2);
+            };
+            if (action.danger == model::Danger::Destructive
+                || action.confirm
+                || action.trust_required)
+                && !yes
+            {
+                eprintln!("holla: action `{action_id}` requires --yes");
+                return Ok(3);
+            }
+            tui::app::set_headless(true);
+            tui::trust::set_assume_trust(yes);
+            let result = (action.run)().await;
+            tui::trust::set_assume_trust(false);
+            tui::app::set_headless(false);
+            if let Err(error) = result {
+                eprintln!("holla: action `{action_id}` failed: {error:#}");
+                return Ok(1);
+            }
+            Ok(0)
+        }
+        CliCommand::Doctor => {
+            println!(
+                "registry: {} groups in {:.2?}",
+                registry.groups.len(),
+                elapsed
+            );
+            println!(
+                "actions: {}",
+                registry
+                    .groups
+                    .iter()
+                    .map(|group| group.actions.len())
+                    .sum::<usize>()
+            );
+            let global = config::global_actions_path();
+            println!(
+                "global config: {}",
+                global
+                    .as_deref()
+                    .map_or_else(|| "unavailable".into(), |path| path.display().to_string())
+            );
+            println!(
+                "project config: {}",
+                std::path::Path::new(".holla.toml").display()
+            );
+            if registry.warnings.is_empty() {
+                println!("config: ok");
+                Ok(0)
+            } else {
+                print_warnings(&registry.warnings);
+                Ok(4)
+            }
+        }
+    }
+}
+
+fn list_actions(groups: &[model::GroupSpec]) -> Vec<ListAction> {
+    groups
+        .iter()
+        .flat_map(|group| {
+            group.actions.iter().map(|action| ListAction {
+                id: action.id.clone(),
+                label: action.label.clone(),
+                group: group.title.clone(),
+                danger: match action.danger {
+                    model::Danger::Safe => "safe",
+                    model::Danger::Mutating => "mutating",
+                    model::Danger::Destructive => "destructive",
+                },
+            })
+        })
+        .collect()
+}
+
+fn print_warnings(warnings: &[String]) {
+    for warning in warnings {
+        eprintln!("holla: config warning: {warning}");
+    }
 }

@@ -86,7 +86,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
         ));
     }
     (!actions.is_empty()).then_some(GroupSpec {
-        id: "system",
+        id: "system".into(),
         title: "System".into(),
         actions,
     })

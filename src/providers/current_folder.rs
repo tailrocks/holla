@@ -150,7 +150,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
     }
 
     (!actions.is_empty()).then_some(GroupSpec {
-        id: "current-folder",
+        id: "current-folder".into(),
         title: "Current folder".into(),
         actions,
     })

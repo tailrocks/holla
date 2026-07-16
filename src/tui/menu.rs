@@ -15,8 +15,8 @@ use termrock::{
     style::{Role, Theme},
     widgets::{
         Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, List, ListRow,
-        ListState, Panel, PanelEmphasis, RowRole, StatusBar, StatusBarState, StatusSlot, TextInput,
-        TextInputOutcome, TextInputState, Validation, Viewport, render_hint_bar,
+        ListState, Panel, PanelEmphasis, RowRole, Severity, StatusBar, StatusBarState, StatusSlot,
+        TextInput, TextInputOutcome, TextInputState, Toast, Validation, Viewport, render_hint_bar,
     },
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -39,6 +39,7 @@ pub struct Menu {
     pub groups: Vec<GroupSpec>,
     provider_orders: Vec<usize>,
     provider_ids: Vec<&'static str>,
+    warnings: Vec<String>,
 }
 
 impl Menu {
@@ -49,6 +50,7 @@ impl Menu {
             groups,
             provider_orders,
             provider_ids: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -64,6 +66,24 @@ impl Menu {
         self.provider_orders.insert(position, provider_index);
         self.provider_ids.insert(position, provider_id);
         self.groups.insert(position, group);
+        self.deduplicate_actions();
+    }
+
+    fn deduplicate_actions(&mut self) {
+        let mut seen = HashSet::new();
+        for group in &mut self.groups {
+            group.actions.retain(|action| {
+                if seen.insert(action.id.clone()) {
+                    true
+                } else {
+                    self.warnings.push(format!(
+                        "action id `{}` collides with an earlier provider; earlier action wins",
+                        action.id
+                    ));
+                    false
+                }
+            });
+        }
     }
 
     fn action(&self, id: &str) -> Option<&ActionSpec> {
@@ -204,7 +224,7 @@ fn menu_rows_with_history(
         }
         let mut previous_group = None;
         for group in &menu.groups {
-            if previous_group != Some(group.id) {
+            if previous_group != Some(group.id.as_str()) {
                 rows.push(ListRow {
                     id: ActionId::Separator(group.id.to_owned()),
                     label: Line::styled(group.title.clone(), theme.style(Role::TextMuted)),
@@ -212,7 +232,7 @@ fn menu_rows_with_history(
                     role: RowRole::Separator,
                     enabled: false,
                 });
-                previous_group = Some(group.id);
+                previous_group = Some(group.id.as_str());
             }
             rows.extend(group.actions.iter().map(|action| ListRow {
                 id: ActionId::Action {
@@ -351,7 +371,7 @@ fn preview_lines(menu: &Menu, selected: Option<&ActionId>, theme: &Theme) -> Vec
 }
 
 fn needs_confirmation(action: &ActionSpec) -> bool {
-    action.danger == Danger::Destructive
+    action.danger == Danger::Destructive || action.confirm
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -413,6 +433,9 @@ pub async fn run() -> anyhow::Result<()> {
                         provider_id,
                         group,
                     }) => menu.insert_scanned_group(provider_index, provider_id, group),
+                    SubscriptionPoll::Ready(ScanEvent::Warning(warning)) => {
+                        menu.warnings.push(warning);
+                    }
                     SubscriptionPoll::Ready(ScanEvent::Finished) | SubscriptionPoll::Closed => {
                         scanning = false;
                         break;
@@ -523,6 +546,9 @@ pub async fn run() -> anyhow::Result<()> {
                 &mut preview_scroll,
             );
             render_hint_bar(frame, footer_area, &MENU_KEYMAP.hint_spans(), &theme);
+            if let Some(warning) = menu.warnings.last() {
+                frame.render_widget(Toast::new(&theme, warning, Severity::Warning), frame.area());
+            }
 
             if let Some(pending) = pending_confirm.as_mut()
                 && let Some(action) = menu.action(&pending.action_id)
@@ -539,7 +565,11 @@ pub async fn run() -> anyhow::Result<()> {
                 );
                 body.push(Line::raw(""));
                 let warning = Line::styled(
-                    "Warning: this deletes local data.",
+                    if action.danger == Danger::Destructive {
+                        "Warning: this deletes local data."
+                    } else {
+                        "This action explicitly requires confirmation."
+                    },
                     theme.style(Role::Warning),
                 );
                 body.push(warning.clone());
@@ -554,7 +584,7 @@ pub async fn run() -> anyhow::Result<()> {
                 }
                 frame.render_stateful_widget(
                     &ChoiceDialog::new(
-                        Dialog::new("Confirm destructive action", Text::from(body), &theme)
+                        Dialog::new("Confirm action", Text::from(body), &theme)
                             .style(theme.style(Role::Text))
                             .emphasis(PanelEmphasis::Focused),
                         &confirm_actions,
@@ -916,7 +946,7 @@ mod tests {
     fn menu_rows_flatten_groups_and_actions_with_stable_ids() {
         let menu = Menu::from_groups(vec![
             GroupSpec {
-                id: "first",
+                id: "first".into(),
                 title: "First".into(),
                 actions: vec![
                     test_action("one", "one", Danger::Safe),
@@ -924,7 +954,7 @@ mod tests {
                 ],
             },
             GroupSpec {
-                id: "second",
+                id: "second".into(),
                 title: "Second".into(),
                 actions: vec![
                     test_action("three", "three", Danger::Safe),
@@ -946,7 +976,7 @@ mod tests {
     #[test]
     fn whitespace_only_query_keeps_grouped_projection() {
         let menu = Menu::from_groups(vec![GroupSpec {
-            id: "first",
+            id: "first".into(),
             title: "First".into(),
             actions: vec![test_action("one", "one", Danger::Safe)],
         }]);
@@ -962,12 +992,12 @@ mod tests {
     fn adjacent_provider_contributions_share_one_group_header() {
         let menu = Menu::from_groups(vec![
             GroupSpec {
-                id: "system",
+                id: "system".into(),
                 title: "System".into(),
                 actions: vec![test_action("one", "one", Danger::Safe)],
             },
             GroupSpec {
-                id: "system",
+                id: "system".into(),
                 title: "System".into(),
                 actions: vec![test_action("two", "two", Danger::Safe)],
             },
@@ -986,7 +1016,7 @@ mod tests {
     #[test]
     fn recent_projection_precedes_normal_groups_and_keeps_normal_action() {
         let menu = Menu::from_groups(vec![GroupSpec {
-            id: "first",
+            id: "first".into(),
             title: "First".into(),
             actions: vec![test_action("one", "one", Danger::Safe)],
         }]);
@@ -1006,7 +1036,7 @@ mod tests {
     #[test]
     fn recent_projection_is_limited_to_five_actions() {
         let menu = Menu::from_groups(vec![GroupSpec {
-            id: "first",
+            id: "first".into(),
             title: "First".into(),
             actions: (0..6)
                 .map(|index| test_action(&format!("action-{index}"), "action", Danger::Safe))
@@ -1030,7 +1060,7 @@ mod tests {
     #[test]
     fn fuzzy_highlight_keeps_combining_graphemes_atomic() {
         let menu = Menu::from_groups(vec![GroupSpec {
-            id: "unicode",
+            id: "unicode".into(),
             title: "Unicode".into(),
             actions: vec![test_action("accent", "e\u{301}clair", Danger::Safe)],
         }]);
@@ -1050,7 +1080,7 @@ mod tests {
     fn group_and_keyword_matches_have_visible_accents() {
         let theme = Theme::default();
         let menu = Menu::from_groups(vec![GroupSpec {
-            id: "docker",
+            id: "docker".into(),
             title: "Docker".into(),
             actions: vec![searchable_action(
                 "docker.stop",
@@ -1102,7 +1132,7 @@ mod tests {
             4,
             "late-provider",
             GroupSpec {
-                id: "late",
+                id: "late".into(),
                 title: "Late".into(),
                 actions: vec![],
             },
@@ -1111,7 +1141,7 @@ mod tests {
             1,
             "early-provider",
             GroupSpec {
-                id: "early",
+                id: "early".into(),
                 title: "Early".into(),
                 actions: vec![],
             },

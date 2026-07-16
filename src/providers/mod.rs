@@ -6,6 +6,7 @@ mod gradle;
 mod insights;
 mod repos;
 mod system;
+mod user;
 
 use crate::model::GroupSpec;
 #[cfg(test)]
@@ -36,12 +37,60 @@ pub enum ScanEvent {
         provider_id: &'static str,
         group: GroupSpec,
     },
+    Warning(String),
     Finished,
+}
+
+pub struct RegistryReport {
+    pub groups: Vec<GroupSpec>,
+    pub warnings: Vec<String>,
+}
+
+pub fn scan_all() -> RegistryReport {
+    let receiver = spawn_scans();
+    let mut groups = Vec::new();
+    let mut warnings = Vec::new();
+    while let Ok(event) = receiver.recv() {
+        match event {
+            ScanEvent::Group {
+                provider_index,
+                group,
+                ..
+            } => groups.push((provider_index, group)),
+            ScanEvent::Warning(warning) => warnings.push(warning),
+            ScanEvent::Finished => break,
+        }
+    }
+    groups.sort_by_key(|(index, _)| *index);
+    let mut seen = std::collections::HashSet::new();
+    for (_, group) in &mut groups {
+        group.actions.retain(|action| {
+            if seen.insert(action.id.clone()) {
+                true
+            } else {
+                warnings.push(format!(
+                    "action id `{}` collides with an earlier provider; earlier action wins",
+                    action.id
+                ));
+                false
+            }
+        });
+    }
+    RegistryReport {
+        groups: groups.into_iter().map(|(_, group)| group).collect(),
+        warnings,
+    }
 }
 
 pub fn spawn_scans() -> mpsc::Receiver<ScanEvent> {
     let (tx, rx) = mpsc::channel();
-    let workers: Vec<_> = all_providers()
+    let (user_providers, errors) = user::load();
+    for error in errors {
+        let _ = tx.send(ScanEvent::Warning(error.to_string()));
+    }
+    let mut providers = all_providers();
+    providers.extend(user_providers);
+    let workers: Vec<_> = providers
         .into_iter()
         .enumerate()
         .map(|(provider_index, provider)| {
@@ -90,6 +139,7 @@ pub(crate) async fn run_shell(command: &str) -> anyhow::Result<()> {
         label: command.to_owned(),
         program: "sh".into(),
         args: vec!["-c".into(), command.to_owned()],
+        working_directory: None,
     }])
     .await
 }
