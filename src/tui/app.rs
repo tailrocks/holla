@@ -14,11 +14,12 @@ use std::{
     time::Duration,
 };
 use termrock::{
-    TailScroll,
+    input::KeyCode,
     interaction::Outcome,
-    keymap::{KeyBinding, KeyChord, Keymap, LogicalKey, Visibility},
+    keymap::{KeyBinding, KeyChord, Keymap, Visibility},
+    layout::centered_rect,
     runtime::{StdSubscription, Subscription, SubscriptionPoll},
-    scroll::DialogScroll,
+    scroll::{DialogScroll, TailScroll},
     style::{Role, Theme},
     widgets::{
         Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, PanelEmphasis,
@@ -181,8 +182,8 @@ enum StatusSlotId {
 static RUNNER_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[
     KeyBinding {
         chords: &[
-            KeyChord::plain(LogicalKey::Left),
-            KeyChord::plain(LogicalKey::Char('h')),
+            KeyChord::plain(KeyCode::Left),
+            KeyChord::plain(KeyCode::Char('h')),
         ],
         action: RunnerKey::PreviousTask,
         hint: Some("previous task"),
@@ -191,8 +192,8 @@ static RUNNER_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[
     },
     KeyBinding {
         chords: &[
-            KeyChord::plain(LogicalKey::Right),
-            KeyChord::plain(LogicalKey::Char('l')),
+            KeyChord::plain(KeyCode::Right),
+            KeyChord::plain(KeyCode::Char('l')),
         ],
         action: RunnerKey::NextTask,
         hint: Some("next task"),
@@ -201,8 +202,8 @@ static RUNNER_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[
     },
     KeyBinding {
         chords: &[
-            KeyChord::plain(LogicalKey::Up),
-            KeyChord::plain(LogicalKey::Char('k')),
+            KeyChord::plain(KeyCode::Up),
+            KeyChord::plain(KeyCode::Char('k')),
         ],
         action: RunnerKey::ScrollUp,
         hint: Some("scroll"),
@@ -211,8 +212,8 @@ static RUNNER_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[
     },
     KeyBinding {
         chords: &[
-            KeyChord::plain(LogicalKey::Down),
-            KeyChord::plain(LogicalKey::Char('j')),
+            KeyChord::plain(KeyCode::Down),
+            KeyChord::plain(KeyCode::Char('j')),
         ],
         action: RunnerKey::ScrollDown,
         hint: None,
@@ -220,21 +221,21 @@ static RUNNER_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[
         glyph: None,
     },
     KeyBinding {
-        chords: &[KeyChord::plain(LogicalKey::PageUp)],
+        chords: &[KeyChord::plain(KeyCode::PageUp)],
         action: RunnerKey::PageUp,
         hint: None,
         visibility: Visibility::HiddenAlias,
         glyph: None,
     },
     KeyBinding {
-        chords: &[KeyChord::plain(LogicalKey::PageDown)],
+        chords: &[KeyChord::plain(KeyCode::PageDown)],
         action: RunnerKey::PageDown,
         hint: None,
         visibility: Visibility::HiddenAlias,
         glyph: None,
     },
     KeyBinding {
-        chords: &[KeyChord::plain(LogicalKey::End)],
+        chords: &[KeyChord::plain(KeyCode::End)],
         action: RunnerKey::FollowTail,
         hint: Some("follow tail"),
         visibility: Visibility::Shown,
@@ -242,8 +243,8 @@ static RUNNER_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[
     },
     KeyBinding {
         chords: &[
-            KeyChord::plain(LogicalKey::Char('q')),
-            KeyChord::plain(LogicalKey::Esc),
+            KeyChord::plain(KeyCode::Char('q')),
+            KeyChord::plain(KeyCode::Esc),
         ],
         action: RunnerKey::Quit,
         hint: Some("stop/close"),
@@ -254,8 +255,8 @@ static RUNNER_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[
 
 static DONE_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[KeyBinding {
     chords: &[
-        KeyChord::plain(LogicalKey::Char('q')),
-        KeyChord::plain(LogicalKey::Esc),
+        KeyChord::plain(KeyCode::Char('q')),
+        KeyChord::plain(KeyCode::Esc),
     ],
     action: RunnerKey::Quit,
     hint: Some("close"),
@@ -588,7 +589,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 &StatusBar {
                     left: &left_slots,
                     right: &right_slots,
-                    style: theme.style(Role::Surface),
+                    theme: &theme,
                     alpha: 1.0,
                 },
                 status_area,
@@ -616,6 +617,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 &Tabs {
                     tabs: &tabs,
                     gap: 1,
+                    theme: &theme,
                 },
                 tabs_area,
                 &mut tabs_state,
@@ -642,11 +644,8 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 &Viewport {
                     lines: &output_lines,
                     title: Some(tasks[selected].label.as_str()),
-                    content_style: theme.style(Role::Text),
-                    border_style: theme.style(Role::BorderFocused),
-                    title_style: theme.style(Role::Text),
-                    scroll_track_style: theme.style(Role::ScrollTrack),
-                    scroll_thumb_style: theme.style(Role::ScrollThumb),
+                    theme: &theme,
+                    content_style: Some(theme.style(Role::Text)),
                 },
                 output_area,
                 &mut viewport_state,
@@ -657,11 +656,11 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
             } else {
                 RUNNER_KEYMAP.hint_spans()
             };
-            render_hint_bar(frame, footer_area, &hints);
+            render_hint_bar(frame, footer_area, &hints, &theme);
 
             if let Some(dialog_state) = cancel_dialog.as_mut() {
                 frame.render_widget(&Backdrop::default(), frame.area());
-                let area = termrock::centered_rect(54, 7, frame.area());
+                let area = centered_rect(54, 7, frame.area());
                 frame.render_stateful_widget(
                     &ChoiceDialog {
                         dialog: Dialog {
@@ -688,7 +687,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
             }
             let key = termrock::input::KeyEvent::from(key);
             if let Some(dialog_state) = cancel_dialog.as_mut() {
-                match dialog_state.handle_key(key, &cancel_actions) {
+                match dialog_state.handle_key(&cancel_actions, key) {
                     Outcome::Activated(CancelChoice::Stop) => {
                         cancel_tasks(&mut tasks, &supervisor.handles);
                         cancel_dialog = None;

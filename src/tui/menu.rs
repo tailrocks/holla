@@ -6,16 +6,17 @@ use ratatui::{
 };
 use std::{collections::HashSet, time::Duration};
 use termrock::{
+    input::KeyCode,
     interaction::Outcome,
-    keymap::{KeyBinding, KeyChord, Keymap, LogicalKey, Visibility},
+    keymap::{KeyBinding, KeyChord, Keymap, Visibility},
+    layout::centered_rect,
     runtime::{StdSubscription, Subscription, SubscriptionPoll},
-    scroll::DialogScroll,
+    scroll::{DialogScroll, max_line_width},
     style::{Role, Theme},
     widgets::{
-        Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, List,
-        ListOutcome, ListRow, ListState, Panel, PanelEmphasis, RowRole, StatusBar, StatusBarState,
-        StatusSlot, TextInput, TextInputOutcome, TextInputState, Validation, Viewport,
-        render_hint_bar,
+        Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, List, ListRow,
+        ListState, Panel, PanelEmphasis, RowRole, StatusBar, StatusBarState, StatusSlot, TextInput,
+        TextInputOutcome, TextInputState, Validation, Viewport, render_hint_bar,
     },
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -95,17 +96,14 @@ struct PendingConfirm {
 
 static MENU_KEYMAP: Keymap<MenuKey> = Keymap::new(&[
     KeyBinding {
-        chords: &[
-            KeyChord::plain(LogicalKey::Up),
-            KeyChord::plain(LogicalKey::Down),
-        ],
+        chords: &[KeyChord::plain(KeyCode::Up), KeyChord::plain(KeyCode::Down)],
         action: MenuKey::Navigate,
         hint: Some("navigate"),
         visibility: Visibility::Shown,
         glyph: Some("↑↓"),
     },
     KeyBinding {
-        chords: &[KeyChord::plain(LogicalKey::Enter)],
+        chords: &[KeyChord::plain(KeyCode::Enter)],
         action: MenuKey::Run,
         hint: Some("run"),
         visibility: Visibility::Shown,
@@ -113,8 +111,8 @@ static MENU_KEYMAP: Keymap<MenuKey> = Keymap::new(&[
     },
     KeyBinding {
         chords: &[
-            KeyChord::plain(LogicalKey::Tab),
-            KeyChord::plain(LogicalKey::Right),
+            KeyChord::plain(KeyCode::Tab),
+            KeyChord::plain(KeyCode::Right),
         ],
         action: MenuKey::Preview,
         hint: Some("preview"),
@@ -122,7 +120,7 @@ static MENU_KEYMAP: Keymap<MenuKey> = Keymap::new(&[
         glyph: Some("tab"),
     },
     KeyBinding {
-        chords: &[KeyChord::plain(LogicalKey::Esc)],
+        chords: &[KeyChord::plain(KeyCode::Esc)],
         action: MenuKey::Quit,
         hint: Some("clear/quit"),
         visibility: Visibility::Shown,
@@ -140,6 +138,7 @@ fn menu_rows(menu: &Menu, query: &str, theme: &Theme) -> Vec<ListRow<'static, Ac
                 rows.push(ListRow {
                     id: format!("separator:{}", group.id),
                     label: Line::styled(group.title.clone(), theme.style(Role::TextMuted)),
+                    trailing: None,
                     role: RowRole::Separator,
                     enabled: false,
                 });
@@ -148,6 +147,7 @@ fn menu_rows(menu: &Menu, query: &str, theme: &Theme) -> Vec<ListRow<'static, Ac
             rows.extend(group.actions.iter().map(|action| ListRow {
                 id: action.id.clone(),
                 label: Line::raw(action.label.clone()),
+                trailing: None,
                 role: RowRole::Item,
                 enabled: true,
             }));
@@ -163,6 +163,7 @@ fn menu_rows(menu: &Menu, query: &str, theme: &Theme) -> Vec<ListRow<'static, Ac
             ListRow {
                 id: action.id.clone(),
                 label: highlighted_hit(group, &hit, theme),
+                trailing: None,
                 role: RowRole::Item,
                 enabled: true,
             }
@@ -344,7 +345,7 @@ pub async fn run() -> anyhow::Result<()> {
             }
             list_state.focused = !preview_focused;
             let preview = preview_lines(&menu, list_state.selected.as_deref(), &theme);
-            let preview_width = termrock::max_line_width(&preview);
+            let preview_width = max_line_width(&preview);
             let mut preview_viewport = (0usize, 0usize);
 
             terminal.draw(|frame| {
@@ -389,7 +390,7 @@ pub async fn run() -> anyhow::Result<()> {
                     &StatusBar {
                         left: &left_slots,
                         right: &right_slots,
-                        style: theme.style(Role::Surface),
+                        theme: &theme,
                         alpha: 1.0,
                     },
                     header_area,
@@ -432,20 +433,13 @@ pub async fn run() -> anyhow::Result<()> {
                     &Viewport {
                         lines: &preview,
                         title: Some("Preview"),
-                        content_style: theme.style(Role::Text),
-                        border_style: theme.style(if preview_focused {
-                            Role::BorderFocused
-                        } else {
-                            Role::Border
-                        }),
-                        title_style: theme.style(Role::Text),
-                        scroll_track_style: theme.style(Role::ScrollTrack),
-                        scroll_thumb_style: theme.style(Role::ScrollThumb),
+                        theme: &theme,
+                        content_style: Some(theme.style(Role::Text)),
                     },
                     preview_area,
                     &mut preview_scroll,
                 );
-                render_hint_bar(frame, footer_area, &MENU_KEYMAP.hint_spans());
+                render_hint_bar(frame, footer_area, &MENU_KEYMAP.hint_spans(), &theme);
 
                 if let Some(pending) = pending_confirm.as_mut()
                     && let Some(action) = menu.action(&pending.action_id)
@@ -466,7 +460,7 @@ pub async fn run() -> anyhow::Result<()> {
                     );
                     body.push(warning.clone());
                     frame.render_widget(&Backdrop::default(), frame.area());
-                    let area = termrock::centered_rect(68, 18, frame.area());
+                    let area = centered_rect(68, 18, frame.area());
                     let max_body_lines = usize::from(area.height.saturating_sub(4));
                     if body.len() > max_body_lines {
                         body.truncate(max_body_lines.saturating_sub(1));
@@ -506,7 +500,7 @@ pub async fn run() -> anyhow::Result<()> {
                 }
                 let key = termrock::input::KeyEvent::from(key);
                 if let Some(pending) = pending_confirm.as_mut() {
-                    match pending.state.handle_key(key, &confirm_actions) {
+                    match pending.state.handle_key(&confirm_actions, key) {
                         Outcome::Activated(ConfirmChoice::Run) => {
                             break Some(pending.action_id.clone());
                         }
@@ -559,7 +553,7 @@ pub async fn run() -> anyhow::Result<()> {
                 }
 
                 match list_state.handle_key(&rows, key) {
-                    ListOutcome::Activated(id) => {
+                    Outcome::Activated(id) => {
                         if let Some(action) = menu.action(&id) {
                             if needs_confirmation(action) {
                                 pending_confirm = Some(PendingConfirm {
@@ -571,9 +565,9 @@ pub async fn run() -> anyhow::Result<()> {
                             }
                         }
                     }
-                    ListOutcome::Changed => preview_scroll = DialogScroll::new(),
-                    ListOutcome::Cancelled => break None,
-                    ListOutcome::Ignored => {
+                    Outcome::Changed => preview_scroll = DialogScroll::new(),
+                    Outcome::Cancelled => break None,
+                    Outcome::Ignored => {
                         if matches!(
                             key.code,
                             termrock::input::KeyCode::Tab | termrock::input::KeyCode::Right
