@@ -112,19 +112,18 @@ answers + chosen path, committed
 ### Spike verdict
 
 - Availability/license (verified 2026-07-17): `fff-core` is not published on
-  crates.io; `fff` `0.3.1` is an unrelated finite-fields crate. The upstream
-  SDK is currently published as prerelease-only `fff-search`
-  `0.9.7-nightly.fce72fa` (MIT, Rust 2024 edition). The fallback's exact
-  current crate is `ignore` `0.4.29` (MIT OR Unlicense).
-- API fit: `fff-search` has synchronous `FilePicker::collect_files` and
-  `fuzzy_search_mixed`, plus a shared-state background scanner. A default
-  `SharedFrecency` leaves the LMDB store uninitialized, so the database is
-  optional at runtime, but `heed` remains unconditional in the dependency
-  graph. The picker accepts one `base_path`; its initial scan builds then
-  commits a snapshot rather than exposing partial searchable hits. Public
-  file/directory search results expose `Score` values but no character match
-  indices, so the required incremental highlighted TUI cannot consume the SDK
-  result directly.
+  crates.io; `fff` `0.3.1` is an unrelated finite-fields crate. The official
+  repository does contain `crates/fff-core`, whose package name is
+  `fff-search`, version `0.9.6`, MIT, Rust 2024 edition. Holla therefore uses
+  the operator-requested repository directly, pinned to exact current `main`
+  SHA `42f38ff66e6c62475678f05ee60c3a311e341884`.
+- API fit: current upstream has synchronous `fuzzy_search_mixed`, a
+  shared-state background scanner, score data, and file match-byte offsets. A
+  default `SharedFrecency` leaves LMDB uninitialized, so no second history DB
+  is created; `heed` remains compiled. Holla disables watching and content
+  indexing. One picker accepts one root, so Holla sequences safe roots and
+  exposes each completed picker while later roots scan. Directory highlight
+  offsets are projected with the existing `nucleo-matcher`.
 - Footprint: an empty Rust 1.97.1 scratch binary plus exact `fff-search`
   resolved 188 packages versus one baseline package: +187 lock packages and
   151 additional unique normal dependency-tree nodes. `heed` and vendored
@@ -135,12 +134,13 @@ answers + chosen path, committed
 - Platform: exact `fff-search 0.9.7-nightly.fce72fa` compiled successfully on
   macOS arm64 with the project's current exact Rust 1.97.1 toolchain; no
   platform failure drove the decision.
-- **Chosen path**: `ignore` `=0.4.29` + existing `nucleo-matcher` — the SDK is
-  disqualified by the recorded dependency threshold and lacks the partial-hit
-  and match-index API required by this design. The fallback uses
-  `WalkBuilder::build_parallel`, adds one direct dual-licensed dependency,
-  keeps matching under holla's existing history policy, and avoids a second
-  database.
+- **Chosen path**: exact Git `fff-search` at
+  `42f38ff66e6c62475678f05ee60c3a311e341884`. The measured crates.io release
+  exceeds the original footprint threshold, but the operator explicitly
+  overrode that gate and requested the official Git source when the core crate
+  was not published. Current upstream also closes the earlier match-offset API
+  gap. Holla accepts the heavy unconditional dependencies, keeps FFF frecency
+  uninitialized, and pins the full SHA for reproducibility.
 
 ### Step 2: Index wrapper
 

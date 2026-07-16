@@ -20,7 +20,7 @@ clap = { version = "4.6", features = ["derive", "color", "help", "usage"] }
 tokio = { version = "1.52", features = ["full"] }
 ratatui = "0.30.2"
 crossterm = { version = "0.29", features = ["event-stream"] }
-termrock = { git = "https://github.com/tailrocks/termrock.git", rev = "ac54f9194d4a58b08bd1d824266f4c5ba1357317", features = ["crossterm"] }
+termrock = { git = "https://github.com/tailrocks/termrock.git", rev = "151aafc0abc46057fdb65532b5bbe551ea3fe369", features = ["crossterm"] }
 anyhow = "1.0"
 thiserror = "2.0"
 which = "8.0"
@@ -30,6 +30,7 @@ libc = "0.2"
 nucleo-matcher = "0.3"
 unicode-segmentation = "1.13"
 jwalk = "0.8"
+fff-search = { git = "https://github.com/dmtrKovalenko/fff.git", rev = "42f38ff66e6c62475678f05ee60c3a311e341884" }
 rayon = "1"
 dashmap = "6"
 dirs = "6"

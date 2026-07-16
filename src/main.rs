@@ -1,6 +1,7 @@
 pub mod cleanup;
 mod commands;
 pub mod du;
+mod find;
 mod frecency;
 pub mod insights;
 mod model;
