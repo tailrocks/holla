@@ -4,6 +4,7 @@ mod current_folder;
 mod disk;
 mod docker;
 mod find;
+mod git_hygiene;
 mod gradle;
 mod insights;
 mod just;
@@ -34,6 +35,7 @@ pub fn all_providers() -> Vec<Box<dyn Provider>> {
         Box::new(make::MakeProvider),
         Box::new(taskfile::TaskfileProvider),
         Box::new(cargo::CargoProvider),
+        Box::new(git_hygiene::GitHygieneProvider),
         Box::new(repos::ReposProvider),
         Box::new(system::SystemProvider),
         Box::new(brew_services::BrewServicesProvider),
