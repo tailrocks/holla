@@ -627,10 +627,8 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
             let top = tasks[selected]
                 .tail
                 .to_top_offset(output_lines.len(), output_viewport_height);
-            let mut viewport_state = DialogScroll {
-                scroll_x: 0,
-                scroll_y: u16::try_from(top).unwrap_or(u16::MAX),
-            };
+            let mut viewport_state = DialogScroll::default();
+            viewport_state.scroll_y = u16::try_from(top).unwrap_or(u16::MAX);
             frame.render_stateful_widget(
                 &Viewport::new(&output_lines, &theme)
                     .title(tasks[selected].label.as_str())

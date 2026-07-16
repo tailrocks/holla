@@ -95,7 +95,7 @@ enum AnalyzerModal {
     Report {
         report: DeleteReport,
         mode: DeleteMode,
-        state: DetailTableState<ReportRow>,
+        state: Box<DetailTableState<ReportRow>>,
     },
 }
 
@@ -301,7 +301,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
             modals.open(AnalyzerModal::Report {
                 report,
                 mode,
-                state: DetailTableState::default(),
+                state: Box::default(),
             });
         }
         drain_scan_events(&handle, &mut scanning, &mut bytes_seen, &mut inaccessible);
