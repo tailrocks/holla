@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::{
     collections::HashSet,
     fs::{self, OpenOptions},
-    io::Write,
+    io::{self, Write},
     os::unix::ffi::OsStrExt,
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -326,7 +326,31 @@ fn move_to_trash(path: &Path) -> Result<(), String> {
 
 #[cfg(not(target_os = "macos"))]
 fn move_to_trash(path: &Path) -> Result<(), String> {
-    trash::delete(path).map_err(|error| error.to_string())
+    // trash-rs checks for a mount-level `.Trash-$UID` and then creates it.
+    // Concurrent callers can both pass the check; the loser receives EEXIST
+    // even though the directory is now ready. Retry that transient race only.
+    for attempt in 0..3 {
+        match trash::delete(path) {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if attempt < 2 && error_chain_has_io_kind(&error, io::ErrorKind::AlreadyExists) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    unreachable!("bounded trash retry loop always returns")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn error_chain_has_io_kind(error: &(dyn std::error::Error + 'static), kind: io::ErrorKind) -> bool {
+    error
+        .downcast_ref::<io::Error>()
+        .is_some_and(|error| error.kind() == kind)
+        || error
+            .source()
+            .is_some_and(|source| error_chain_has_io_kind(source, kind))
 }
 
 fn reject_symlink_ancestors(parent: &Path) -> Result<(), Rejection> {
