@@ -8,7 +8,7 @@ pub struct MiseTask {
     pub description: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Probe {
     // system tools
     pub git: bool,
@@ -22,8 +22,6 @@ pub struct Probe {
 
     // current folder context
     pub in_git_repo: bool,
-    #[expect(dead_code)]
-    pub has_mise_toml: bool,
     pub has_docker_compose: bool,
     pub has_gradle_build: bool,
     pub has_idea_dir: bool,
@@ -72,7 +70,6 @@ impl Probe {
             omz_dir,
             idea,
             in_git_repo,
-            has_mise_toml,
             has_docker_compose,
             has_gradle_build,
             has_idea_dir,
@@ -80,28 +77,79 @@ impl Probe {
             child_git_repos,
         }
     }
+
+    pub fn current_folder() -> Self {
+        let git = which("git").is_ok();
+        let docker = which("docker").is_ok();
+        let gradle = which("gradle").is_ok();
+        let mise = which("mise").is_ok();
+        let idea = which("idea").is_ok();
+        let in_git_repo = Path::new(".git").exists();
+        let has_mise_toml = Path::new("mise.toml").exists() || Path::new(".mise.toml").exists();
+        let has_docker_compose = Path::new("docker-compose.yml").exists()
+            || Path::new("docker-compose.yaml").exists()
+            || Path::new("compose.yml").exists()
+            || Path::new("compose.yaml").exists();
+        let has_gradle_build =
+            Path::new("build.gradle").exists() || Path::new("build.gradle.kts").exists();
+        let has_idea_dir = Path::new(".idea").exists();
+        let mise_tasks = if mise && has_mise_toml {
+            discover_mise_tasks()
+        } else {
+            vec![]
+        };
+        Self {
+            git,
+            docker,
+            gradle,
+            mise,
+            idea,
+            in_git_repo,
+            has_docker_compose,
+            has_gradle_build,
+            has_idea_dir,
+            mise_tasks,
+            ..Self::default()
+        }
+    }
+
+    pub fn repositories() -> Self {
+        Self {
+            git: which("git").is_ok(),
+            child_git_repos: discover_child_git_repos(),
+            ..Self::default()
+        }
+    }
+
+    pub fn system() -> Self {
+        Self {
+            brew: which("brew").is_ok(),
+            mise: which("mise").is_ok(),
+            amp: which("amp").is_ok(),
+            omz_dir: discover_omz_dir(),
+            ..Self::default()
+        }
+    }
+
+    pub fn docker() -> Self {
+        Self {
+            docker: which("docker").is_ok(),
+            ..Self::default()
+        }
+    }
+
+    pub fn gradle() -> Self {
+        Self {
+            gradle: which("gradle").is_ok(),
+            ..Self::default()
+        }
+    }
 }
 
 #[cfg(test)]
 impl Probe {
     pub(crate) fn empty() -> Self {
-        Self {
-            git: false,
-            docker: false,
-            brew: false,
-            gradle: false,
-            mise: false,
-            amp: false,
-            omz_dir: None,
-            idea: false,
-            in_git_repo: false,
-            has_mise_toml: false,
-            has_docker_compose: false,
-            has_gradle_build: false,
-            has_idea_dir: false,
-            mise_tasks: vec![],
-            child_git_repos: vec![],
-        }
+        Self::default()
     }
 }
 

@@ -1,5 +1,8 @@
 mod commands;
+mod model;
 mod probe;
+mod providers;
+mod search;
 mod tui;
 
 use clap::Command;
@@ -11,7 +14,5 @@ async fn main() -> anyhow::Result<()> {
         .about("Adaptive dev environment CLI")
         .get_matches();
 
-    let probe = probe::Probe::run();
-    let menu = tui::menu::Menu::build(&probe);
-    tui::menu::run(menu).await
+    tui::menu::run(providers::spawn_scans()).await
 }
