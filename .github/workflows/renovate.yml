@@ -23,6 +23,15 @@ jobs:
           restore-keys: |
             renovate-${{ runner.os }}-
 
+      - name: Prepare shared Renovate data
+        # The action deliberately runs its container as an unprivileged user.
+        # The restored cache belongs to the host runner, while /tmp is bind
+        # mounted into the container. Make that shared boundary writable
+        # without coupling the workflow to either side's numeric UID.
+        run: |
+          sudo install -d -m 0777 /tmp/renovate /tmp/renovate/cache /tmp/renovate/repos
+          sudo chmod -R a+rwX /tmp/renovate
+
       - name: Self-hosted Renovate
         # The PAT named "tailrocks-renovate" (fine-grained, not classic) must be
         # stored in the repo secret GH_RENOVATE_TOKEN.
@@ -40,9 +49,3 @@ jobs:
           # default author would silently break DCO on every Renovate PR.
           RENOVATE_GIT_AUTHOR: "Renovate Bot <renovate@whitesourcesoftware.com>"
           LOG_LEVEL: debug
-
-      - name: Fix Renovate cache permissions for save
-        # The Renovate container runs as root, so the cache files are
-        # root-owned; chown them back so the post-job cache save can read them.
-        if: always()
-        run: sudo chown -R "$(whoami)" /tmp/renovate 2>/dev/null || true
