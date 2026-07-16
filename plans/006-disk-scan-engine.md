@@ -20,6 +20,15 @@
 - **Category**: direction / feature
 - **Planned at**: commit `ad8a0f1`, 2026-07-16
 
+**Operator amendment (2026-07-16):** the active execution directive says to
+continue through plan blockers and make the project-aligned decision without
+asking. `libc` 0.2.186 exposes the QoS API but not `setiopolicy_np` or its
+dataless constants. The implementation therefore binds that public symbol and
+uses values verified verbatim from the installed macOS SDK headers
+(`<sys/resource.h>`). Initialization is fail-closed: no traversal starts when
+the dataless policy cannot be installed. These are API constants, not syscall
+numbers.
+
 ## Why this matters
 
 PRODUCT.md flow #2: the disk-usage control panel — see what occupies space,

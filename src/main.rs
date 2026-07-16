@@ -1,4 +1,5 @@
 mod commands;
+pub mod du;
 mod model;
 mod probe;
 mod providers;
