@@ -1,3 +1,4 @@
+pub mod cache;
 mod hardlinks;
 mod platform;
 mod tree;
