@@ -56,7 +56,7 @@ pub fn validate(path: &Path) -> Result<(), Rejection> {
     if home.as_deref() == Some(path)
         || home
             .as_deref()
-            .is_some_and(|home| path == home.join(".Trash"))
+            .is_some_and(|home| is_protected_user_path(path, home))
     {
         return Err(Rejection("path is a protected user root".into()));
     }
@@ -82,6 +82,27 @@ pub fn validate(path: &Path) -> Result<(), Rejection> {
     }
 
     Ok(())
+}
+
+fn is_protected_user_path(path: &Path, home: &Path) -> bool {
+    let library = home.join("Library");
+    let mobile_documents = library.join("Mobile Documents");
+    path.starts_with(home.join(".Trash"))
+        || path.starts_with(library.join("Keychains"))
+        || path.starts_with(library.join("Application Support"))
+        || path.starts_with(library.join("Safari"))
+        || path.starts_with(library.join("Containers/com.docker.docker"))
+        || path
+            .strip_prefix(&library)
+            .ok()
+            .and_then(|relative| relative.components().next())
+            .is_some_and(|component| {
+                component
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .starts_with(b"Mobile Documents")
+            })
+        || path == mobile_documents
 }
 
 pub fn execute(plan: &DeletePlan) -> DeleteReport {
