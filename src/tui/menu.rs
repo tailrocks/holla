@@ -121,9 +121,9 @@ impl Menu {
             });
             current_actions.push(Action {
                 label: "compose: logs".into(),
-                description: "Follow service logs".into(),
-                preview: "$ docker compose logs -f".into(),
-                handler: Box::new(|| Box::pin(run_shell("docker compose logs -f"))),
+                description: "Show recent service logs".into(),
+                preview: "$ docker compose logs --tail 200".into(),
+                handler: Box::new(|| Box::pin(run_shell("docker compose logs --tail 200"))),
             });
         }
 
@@ -146,36 +146,49 @@ impl Menu {
             });
         }
 
-        // ── Parent folder ────────────────────────────────────────────────
-        if probe.git && probe.parent_git_repos.len() > 1 {
-            let repo_list = probe.parent_git_repos.join(", ");
+        // ── Repositories in this folder ─────────────────────────────────
+        if probe.git && probe.child_git_repos.len() > 1 {
+            let repo_list = probe.child_git_repos.join(", ");
+            let pull_repos = probe.child_git_repos.clone();
+            let push_repos = probe.child_git_repos.clone();
+            let status_repos = probe.child_git_repos.clone();
+            let remote_repos = probe.child_git_repos.clone();
             groups.push(Group {
-                title: "Parent folder".into(),
+                title: "Repos in this folder".into(),
                 icon: "",
                 actions: vec![
                     Action {
                         label: "git: pull all repos".into(),
                         description: format!(
                             "Pull {} repos in parallel",
-                            probe.parent_git_repos.len()
+                            probe.child_git_repos.len()
                         ),
                         preview: format!("Repos: {repo_list}\n\n$ git pull (parallel)"),
-                        handler: Box::new(|| Box::pin(crate::commands::git::pull_all())),
+                        handler: Box::new(move || {
+                            let repos = pull_repos.clone();
+                            Box::pin(async move { crate::commands::git::pull_all(&repos).await })
+                        }),
                     },
                     Action {
                         label: "git: push all repos".into(),
                         description: format!(
                             "Push {} repos in parallel",
-                            probe.parent_git_repos.len()
+                            probe.child_git_repos.len()
                         ),
                         preview: format!("Repos: {repo_list}\n\n$ git push (parallel)"),
-                        handler: Box::new(|| Box::pin(crate::commands::git::push_all())),
+                        handler: Box::new(move || {
+                            let repos = push_repos.clone();
+                            Box::pin(async move { crate::commands::git::push_all(&repos).await })
+                        }),
                     },
                     Action {
                         label: "git: status all repos".into(),
                         description: "Show status of all repos".into(),
                         preview: format!("Repos: {repo_list}\n\n$ git status --short"),
-                        handler: Box::new(|| Box::pin(crate::commands::git::status_all())),
+                        handler: Box::new(move || {
+                            let repos = status_repos.clone();
+                            Box::pin(async move { crate::commands::git::status_all(&repos).await })
+                        }),
                     },
                     Action {
                         label: "git: push all remotes".into(),
@@ -183,7 +196,12 @@ impl Menu {
                         preview: format!(
                             "Repos: {repo_list}\n\n$ git push origin\n$ git push gitlab"
                         ),
-                        handler: Box::new(|| Box::pin(crate::commands::git::push_all_remotes())),
+                        handler: Box::new(move || {
+                            let repos = remote_repos.clone();
+                            Box::pin(
+                                async move { crate::commands::git::push_all_remotes(&repos).await },
+                            )
+                        }),
                     },
                 ],
             });
@@ -192,7 +210,7 @@ impl Menu {
         // ── System ───────────────────────────────────────────────────────
         let mut system_actions: Vec<Action> = Vec::new();
 
-        if probe.brew || probe.mise || probe.amp || probe.omz {
+        if probe.brew || probe.mise || probe.amp || probe.omz_dir.is_some() {
             system_actions.push(Action {
                 label: "upgrade: everything".into(),
                 description: "Upgrade all detected tools in parallel".into(),
@@ -230,12 +248,15 @@ impl Menu {
                 handler: Box::new(|| Box::pin(crate::commands::upgrade::run_amp())),
             });
         }
-        if probe.omz {
+        if let Some(omz_dir) = &probe.omz_dir {
+            let omz_dir = omz_dir.clone();
             system_actions.push(Action {
                 label: "upgrade: oh-my-zsh".into(),
                 description: "Update oh-my-zsh to latest version".into(),
-                preview: "$ omz update".into(),
-                handler: Box::new(|| Box::pin(crate::commands::upgrade::run_omz())),
+                preview: "$ sh ~/.oh-my-zsh/tools/upgrade.sh".into(),
+                handler: Box::new(move || {
+                    Box::pin(crate::commands::upgrade::run_omz(omz_dir.clone()))
+                }),
             });
         }
         if probe.docker {
@@ -276,8 +297,8 @@ impl Menu {
 
 fn build_upgrade_preview(probe: &Probe) -> String {
     let mut lines = vec!["Runs in parallel:".to_string()];
-    if probe.omz {
-        lines.push("  $ omz update".into());
+    if probe.omz_dir.is_some() {
+        lines.push("  $ sh ~/.oh-my-zsh/tools/upgrade.sh".into());
     }
     if probe.mise {
         lines.push("  $ mise upgrade".into());
@@ -637,5 +658,83 @@ mod tests {
             .expect("mise action");
 
         assert_eq!(action.preview, "$ mise run build");
+    }
+
+    #[test]
+    fn multiple_child_repositories_build_repo_group() {
+        let mut probe = Probe::empty();
+        probe.git = true;
+        probe.child_git_repos = vec!["beta".into(), "alpha".into()];
+
+        let menu = Menu::build(&probe);
+
+        assert_eq!(
+            action_labels(group(&menu, "Repos in this folder")),
+            vec![
+                "git: pull all repos",
+                "git: push all repos",
+                "git: status all repos",
+                "git: push all remotes",
+            ]
+        );
+    }
+
+    #[test]
+    fn single_child_repository_does_not_build_repo_group() {
+        let mut probe = Probe::empty();
+        probe.git = true;
+        probe.child_git_repos = vec!["alpha".into()];
+
+        let menu = Menu::build(&probe);
+
+        assert!(
+            menu.groups
+                .iter()
+                .all(|group| group.title != "Repos in this folder")
+        );
+    }
+
+    #[test]
+    fn omz_directory_builds_upgrade_action() {
+        let mut probe = Probe::empty();
+        probe.omz_dir = Some("/tmp/.oh-my-zsh".into());
+
+        let menu = Menu::build(&probe);
+        let action = group(&menu, "System")
+            .actions
+            .iter()
+            .find(|action| action.label == "upgrade: oh-my-zsh")
+            .expect("oh-my-zsh action");
+
+        assert_eq!(action.preview, "$ sh ~/.oh-my-zsh/tools/upgrade.sh");
+    }
+
+    #[test]
+    fn missing_omz_directory_omits_upgrade_action() {
+        let menu = Menu::build(&Probe::empty());
+
+        assert!(
+            menu.groups
+                .iter()
+                .flat_map(|group| &group.actions)
+                .all(|action| action.label != "upgrade: oh-my-zsh")
+        );
+    }
+
+    #[test]
+    fn compose_logs_action_is_bounded() {
+        let mut probe = Probe::empty();
+        probe.docker = true;
+        probe.has_docker_compose = true;
+
+        let menu = Menu::build(&probe);
+        let action = group(&menu, "Current folder")
+            .actions
+            .iter()
+            .find(|action| action.label == "compose: logs")
+            .expect("compose logs action");
+
+        assert_eq!(action.description, "Show recent service logs");
+        assert_eq!(action.preview, "$ docker compose logs --tail 200");
     }
 }

@@ -1,11 +1,17 @@
 use crate::probe::Probe;
 use crate::tui::{TaskDef, run_parallel_tasks, run_tasks};
+use std::path::PathBuf;
 
 pub async fn run_all() -> anyhow::Result<()> {
     let probe = Probe::run();
     let mut tasks = Vec::new();
-    if probe.omz {
-        tasks.push(TaskDef::new("oh-my-zsh upgrade", "omz", &["update"]));
+    if let Some(dir) = probe.omz_dir {
+        let script = dir.join("tools/upgrade.sh");
+        tasks.push(TaskDef::new(
+            "oh-my-zsh upgrade",
+            "sh",
+            &[script.to_string_lossy().as_ref()],
+        ));
     }
     if probe.mise {
         tasks.push(TaskDef::new("mise upgrade", "mise", &["upgrade"]));
@@ -57,6 +63,12 @@ pub async fn run_amp() -> anyhow::Result<()> {
     run_tasks(vec![TaskDef::new("amp update", "amp", &["update"])]).await
 }
 
-pub async fn run_omz() -> anyhow::Result<()> {
-    run_tasks(vec![TaskDef::new("oh-my-zsh upgrade", "omz", &["update"])]).await
+pub async fn run_omz(omz_dir: PathBuf) -> anyhow::Result<()> {
+    let script = omz_dir.join("tools/upgrade.sh");
+    run_tasks(vec![TaskDef::new(
+        "oh-my-zsh upgrade",
+        "sh",
+        &[script.to_string_lossy().as_ref()],
+    )])
+    .await
 }

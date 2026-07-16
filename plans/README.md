@@ -21,7 +21,7 @@ Operator directives baked into every plan:
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 001 | PRODUCT.md — mission, scope, UX flows, roadmap | P1 | S | — | DONE |
-| 002 | Test baseline + four confirmed bug fixes | P1 | M | — | TODO |
+| 002 | Test baseline + four confirmed bug fixes | P1 | M | — | DONE |
 | 003 | TermRock migration of the launcher menu | P1 | L | 002 | TODO |
 | 004 | Task runner: streaming output + cancellation | P1 | L | 003 | TODO |
 | 005 | Provider/Action model, async probe, fuzzy search, confirmations | P1 | L | 003, 004 | TODO |

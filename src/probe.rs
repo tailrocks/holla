@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use which::which;
 
@@ -17,7 +17,7 @@ pub struct Probe {
     pub gradle: bool,
     pub mise: bool,
     pub amp: bool,
-    pub omz: bool,
+    pub omz_dir: Option<PathBuf>,
     pub idea: bool,
 
     // current folder context
@@ -29,8 +29,8 @@ pub struct Probe {
     pub has_idea_dir: bool,
     pub mise_tasks: Vec<MiseTask>,
 
-    // parent folder context
-    pub parent_git_repos: Vec<String>,
+    // repositories immediately inside the current folder
+    pub child_git_repos: Vec<String>,
 }
 
 impl Probe {
@@ -41,7 +41,7 @@ impl Probe {
         let gradle = which("gradle").is_ok();
         let mise = which("mise").is_ok();
         let amp = which("amp").is_ok();
-        let omz = which("omz").is_ok();
+        let omz_dir = discover_omz_dir();
         let idea = which("idea").is_ok();
 
         let in_git_repo = Path::new(".git").exists();
@@ -60,7 +60,7 @@ impl Probe {
             vec![]
         };
 
-        let parent_git_repos = discover_parent_git_repos();
+        let child_git_repos = discover_child_git_repos();
 
         Self {
             git,
@@ -69,7 +69,7 @@ impl Probe {
             gradle,
             mise,
             amp,
-            omz,
+            omz_dir,
             idea,
             in_git_repo,
             has_mise_toml,
@@ -77,7 +77,7 @@ impl Probe {
             has_gradle_build,
             has_idea_dir,
             mise_tasks,
-            parent_git_repos,
+            child_git_repos,
         }
     }
 }
@@ -92,7 +92,7 @@ impl Probe {
             gradle: false,
             mise: false,
             amp: false,
-            omz: false,
+            omz_dir: None,
             idea: false,
             in_git_repo: false,
             has_mise_toml: false,
@@ -100,7 +100,7 @@ impl Probe {
             has_gradle_build: false,
             has_idea_dir: false,
             mise_tasks: vec![],
-            parent_git_repos: vec![],
+            child_git_repos: vec![],
         }
     }
 }
@@ -115,6 +115,17 @@ fn discover_mise_tasks() -> Vec<MiseTask> {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     parse_mise_tasks(&stdout)
+}
+
+fn discover_omz_dir() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("ZSH").map(PathBuf::from)
+        && path.is_dir()
+    {
+        return Some(path);
+    }
+
+    let path = PathBuf::from(std::env::var_os("HOME")?).join(".oh-my-zsh");
+    path.is_dir().then_some(path)
 }
 
 fn parse_mise_tasks(stdout: &str) -> Vec<MiseTask> {
@@ -140,15 +151,17 @@ fn parse_mise_tasks(stdout: &str) -> Vec<MiseTask> {
         .collect()
 }
 
-fn discover_parent_git_repos() -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir("..") else {
+fn discover_child_git_repos() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(".") else {
         return vec![];
     };
-    entries
+    let mut repos: Vec<_> = entries
         .flatten()
         .filter(|e| e.path().join(".git").exists())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect()
+        .collect();
+    repos.sort();
+    repos
 }
 
 #[cfg(test)]
