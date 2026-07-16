@@ -3,7 +3,7 @@ use crate::tui::{TaskDef, run_parallel_tasks, run_tasks};
 use std::path::PathBuf;
 
 pub async fn run_all() -> anyhow::Result<()> {
-    let probe = Probe::run();
+    let probe = Probe::system();
     let mut tasks = Vec::new();
     if let Some(dir) = probe.omz_dir {
         let script = dir.join("tools/upgrade.sh");

@@ -1,9 +1,8 @@
+use crate::model::GroupSpec;
 use nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
 };
-
-use crate::model::GroupSpec;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchHit {
@@ -51,17 +50,6 @@ pub fn search(groups: &[GroupSpec], query: &str) -> Vec<SearchHit> {
     hits
 }
 
-pub fn label_indices(group: &GroupSpec, hit: &SearchHit) -> Vec<usize> {
-    let start = group.title.chars().count().saturating_add(1);
-    let end = start.saturating_add(group.actions[hit.action].label.chars().count());
-    hit.indices
-        .iter()
-        .filter_map(|index| usize::try_from(*index).ok())
-        .filter(|index| (*index >= start) && (*index < end))
-        .map(|index| index - start)
-        .collect()
-}
-
 fn haystack(group: &GroupSpec, action_index: usize) -> String {
     let action = &group.actions[action_index];
     format!(
@@ -77,6 +65,7 @@ fn haystack(group: &GroupSpec, action_index: usize) -> String {
 mod tests {
     use super::*;
     use crate::model::{ActionSpec, Danger};
+    use unicode_segmentation::UnicodeSegmentation;
 
     fn action(id: &str, label: &str, keywords: &'static [&'static str]) -> ActionSpec {
         ActionSpec::new(
@@ -138,10 +127,19 @@ mod tests {
     }
 
     #[test]
-    fn label_indices_are_relative_to_the_visible_label() {
+    fn match_indices_count_unicode_graphemes() {
         let groups = fixtures();
         let hit = search(&groups, "logs").remove(0);
 
-        assert_eq!(label_indices(&groups[hit.group], &hit), [7, 8, 9, 10]);
+        let label_start = groups[hit.group].title.graphemes(true).count() + 1;
+        assert_eq!(
+            hit.indices,
+            [
+                label_start as u32 + 7,
+                label_start as u32 + 8,
+                label_start as u32 + 9,
+                label_start as u32 + 10
+            ]
+        );
     }
 }

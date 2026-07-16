@@ -30,7 +30,7 @@ Operator directives baked into every plan:
 | 002 | Test baseline + four confirmed bug fixes | P1 | M | — | DONE |
 | 003 | TermRock migration of the launcher menu | P1 | L | 002 | DONE — smoke: empty/repo/40×10 resize; terminal restored |
 | 004 | Task runner: streaming output + cancellation | P1 | L | 003 | DONE — smoke: live/sequential; TERM-resistant group cancelled and reaped; terminal restored |
-| 005 | Provider/Action model, async probe, fuzzy search, confirmations | P1 | L | 003, 004 | TODO |
+| 005 | Provider/Action model, async probe, fuzzy search, confirmations | P1 | L | 003, 004 | DONE — smoke: instant streaming scan/search highlights/destructive Cancel; runner live; terminal restored |
 | 006 | Disk scan engine (streaming, cancellable, APFS-correct) | P2 | L | 002 | TODO |
 | 007 | TermRock extensions (multi-select, metadata cells, progress, log pane) | P2 | L | 003 | TODO |
 | 008 | Disk analyzer TUI + validated deletion choke point | P2 | L | 005, 006, 007 | TODO |

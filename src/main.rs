@@ -14,5 +14,5 @@ async fn main() -> anyhow::Result<()> {
         .about("Adaptive dev environment CLI")
         .get_matches();
 
-    tui::menu::run(providers::spawn_scans()).await
+    tui::menu::run().await
 }

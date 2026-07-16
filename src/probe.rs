@@ -32,52 +32,6 @@ pub struct Probe {
 }
 
 impl Probe {
-    pub fn run() -> Self {
-        let git = which("git").is_ok();
-        let docker = which("docker").is_ok();
-        let brew = which("brew").is_ok();
-        let gradle = which("gradle").is_ok();
-        let mise = which("mise").is_ok();
-        let amp = which("amp").is_ok();
-        let omz_dir = discover_omz_dir();
-        let idea = which("idea").is_ok();
-
-        let in_git_repo = Path::new(".git").exists();
-        let has_mise_toml = Path::new("mise.toml").exists() || Path::new(".mise.toml").exists();
-        let has_docker_compose = Path::new("docker-compose.yml").exists()
-            || Path::new("docker-compose.yaml").exists()
-            || Path::new("compose.yml").exists()
-            || Path::new("compose.yaml").exists();
-        let has_gradle_build =
-            Path::new("build.gradle").exists() || Path::new("build.gradle.kts").exists();
-        let has_idea_dir = Path::new(".idea").exists();
-
-        let mise_tasks = if mise && has_mise_toml {
-            discover_mise_tasks()
-        } else {
-            vec![]
-        };
-
-        let child_git_repos = discover_child_git_repos();
-
-        Self {
-            git,
-            docker,
-            brew,
-            gradle,
-            mise,
-            amp,
-            omz_dir,
-            idea,
-            in_git_repo,
-            has_docker_compose,
-            has_gradle_build,
-            has_idea_dir,
-            mise_tasks,
-            child_git_repos,
-        }
-    }
-
     pub fn current_folder() -> Self {
         let git = which("git").is_ok();
         let docker = which("docker").is_ok();

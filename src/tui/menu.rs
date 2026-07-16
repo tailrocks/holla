@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     text::{Line, Span, Text},
 };
-use std::{collections::HashSet, sync::mpsc, time::Duration};
+use std::{collections::HashSet, time::Duration};
 use termrock::{
     interaction::Outcome,
     keymap::{KeyBinding, KeyChord, Keymap, LogicalKey, Visibility},
@@ -18,11 +18,12 @@ use termrock::{
         render_hint_bar,
     },
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     model::{ActionSpec, Danger, GroupSpec},
-    providers::ScanEvent,
-    search::{SearchHit, label_indices, search},
+    providers::{self, ScanEvent},
+    search::{SearchHit, search},
 };
 
 type ActionId = String;
@@ -130,6 +131,7 @@ static MENU_KEYMAP: Keymap<MenuKey> = Keymap::new(&[
 ]);
 
 fn menu_rows(menu: &Menu, query: &str, theme: &Theme) -> Vec<ListRow<'static, ActionId>> {
+    let query = query.trim();
     if query.is_empty() {
         let mut rows = Vec::new();
         let mut previous_group = None;
@@ -160,7 +162,7 @@ fn menu_rows(menu: &Menu, query: &str, theme: &Theme) -> Vec<ListRow<'static, Ac
             let action = &group.actions[hit.action];
             ListRow {
                 id: action.id.clone(),
-                label: highlighted_label(&action.label, group, &hit, theme),
+                label: highlighted_hit(group, &hit, theme),
                 role: RowRole::Item,
                 enabled: true,
             }
@@ -168,29 +170,80 @@ fn menu_rows(menu: &Menu, query: &str, theme: &Theme) -> Vec<ListRow<'static, Ac
         .collect()
 }
 
-fn highlighted_label(
-    label: &str,
-    group: &GroupSpec,
-    hit: &SearchHit,
+fn highlighted_hit(group: &GroupSpec, hit: &SearchHit, theme: &Theme) -> Line<'static> {
+    let action = &group.actions[hit.action];
+    let matched: HashSet<_> = hit
+        .indices
+        .iter()
+        .filter_map(|index| usize::try_from(*index).ok())
+        .collect();
+    let keywords = action.keywords.join(" ");
+    let group_start = 0;
+    let label_start = group.title.graphemes(true).count() + 1;
+    let keywords_start = label_start + action.label.graphemes(true).count() + 1;
+    let description_start = keywords_start + keywords.graphemes(true).count() + 1;
+    let mut spans = Vec::new();
+
+    push_highlighted(
+        &mut spans,
+        &group.title,
+        group_start,
+        &matched,
+        Role::TextMuted,
+        theme,
+    );
+    spans.push(Span::styled(" › ", theme.style(Role::TextMuted)));
+    push_highlighted(
+        &mut spans,
+        &action.label,
+        label_start,
+        &matched,
+        Role::Text,
+        theme,
+    );
+    if !keywords.is_empty() {
+        spans.push(Span::styled(" · ", theme.style(Role::TextMuted)));
+        push_highlighted(
+            &mut spans,
+            &keywords,
+            keywords_start,
+            &matched,
+            Role::TextMuted,
+            theme,
+        );
+    }
+    if !action.description.is_empty() {
+        spans.push(Span::styled(" — ", theme.style(Role::TextMuted)));
+        push_highlighted(
+            &mut spans,
+            &action.description,
+            description_start,
+            &matched,
+            Role::TextMuted,
+            theme,
+        );
+    }
+    Line::from(spans)
+}
+
+fn push_highlighted(
+    spans: &mut Vec<Span<'static>>,
+    value: &str,
+    start: usize,
+    matched: &HashSet<usize>,
+    base_role: Role,
     theme: &Theme,
-) -> Line<'static> {
-    let matched: HashSet<_> = label_indices(group, hit).into_iter().collect();
-    Line::from(
-        label
-            .chars()
-            .enumerate()
-            .map(|(index, character)| {
-                Span::styled(
-                    character.to_string(),
-                    theme.style(if matched.contains(&index) {
-                        Role::Accent
-                    } else {
-                        Role::Text
-                    }),
-                )
-            })
-            .collect::<Vec<_>>(),
-    )
+) {
+    spans.extend(value.graphemes(true).enumerate().map(|(index, grapheme)| {
+        Span::styled(
+            grapheme.to_owned(),
+            theme.style(if matched.contains(&(start + index)) {
+                Role::Accent
+            } else {
+                base_role
+            }),
+        )
+    }));
 }
 
 fn preview_lines(menu: &Menu, selected: Option<&str>, theme: &Theme) -> Vec<Line<'static>> {
@@ -224,10 +277,10 @@ fn needs_confirmation(action: &ActionSpec) -> bool {
     action.danger == Danger::Destructive
 }
 
-pub async fn run(receiver: mpsc::Receiver<ScanEvent>) -> anyhow::Result<()> {
+pub async fn run() -> anyhow::Result<()> {
     let theme = Theme::tailrocks_phosphor();
     let mut menu = Menu::default();
-    let mut scans = StdSubscription(receiver);
+    let mut scans: Option<StdSubscription<ScanEvent>> = None;
     let mut scanning = true;
     let mut search_state = TextInputState::new("").with_allow_empty(true);
     let mut list_state = ListState::new(None::<String>);
@@ -262,18 +315,21 @@ pub async fn run(receiver: mpsc::Receiver<ScanEvent>) -> anyhow::Result<()> {
 
     let selected_action =
         loop {
-            while let SubscriptionPoll::Ready(scan) = scans.poll_next() {
-                match scan {
-                    ScanEvent::Group {
-                        provider_index,
-                        provider_id,
-                        group,
-                    } => menu.insert_scanned_group(provider_index, provider_id, group),
-                    ScanEvent::Finished => scanning = false,
+            if let Some(scans) = scans.as_mut() {
+                loop {
+                    match scans.poll_next() {
+                        SubscriptionPoll::Ready(ScanEvent::Group {
+                            provider_index,
+                            provider_id,
+                            group,
+                        }) => menu.insert_scanned_group(provider_index, provider_id, group),
+                        SubscriptionPoll::Ready(ScanEvent::Finished) | SubscriptionPoll::Closed => {
+                            scanning = false;
+                            break;
+                        }
+                        SubscriptionPoll::Pending => break,
+                    }
                 }
-            }
-            if matches!(scans.poll_next(), SubscriptionPoll::Closed) {
-                scanning = false;
             }
 
             let rows = menu_rows(&menu, search_state.value(), &theme);
@@ -404,12 +460,20 @@ pub async fn run(receiver: mpsc::Receiver<ScanEvent>) -> anyhow::Result<()> {
                         }),
                     );
                     body.push(Line::raw(""));
-                    body.push(Line::styled(
+                    let warning = Line::styled(
                         "Warning: this deletes local data.",
                         theme.style(Role::Warning),
-                    ));
+                    );
+                    body.push(warning.clone());
                     frame.render_widget(&Backdrop::default(), frame.area());
-                    let area = termrock::centered_rect(68, 12, frame.area());
+                    let area = termrock::centered_rect(68, 18, frame.area());
+                    let max_body_lines = usize::from(area.height.saturating_sub(4));
+                    if body.len() > max_body_lines {
+                        body.truncate(max_body_lines.saturating_sub(1));
+                        if max_body_lines > 0 {
+                            body.push(warning);
+                        }
+                    }
                     frame.render_stateful_widget(
                         &ChoiceDialog {
                             dialog: Dialog {
@@ -427,6 +491,12 @@ pub async fn run(receiver: mpsc::Receiver<ScanEvent>) -> anyhow::Result<()> {
                     );
                 }
             })?;
+
+            if scans.is_none() {
+                // First frame is now visible. Only then may blocking provider work start.
+                scans = Some(StdSubscription(providers::spawn_scans()));
+                continue;
+            }
 
             if event::poll(Duration::from_millis(50))?
                 && let Event::Key(key) = event::read()?
@@ -661,9 +731,73 @@ mod tests {
         assert_eq!(action.danger, Danger::Safe);
     }
 
+    #[test]
+    fn idea_cleanup_is_destructive() {
+        let mut probe = Probe::empty();
+        probe.has_idea_dir = true;
+        let menu = menu(&probe);
+        let action = menu.action("idea.clean").expect("idea clean action");
+
+        assert_eq!(action.danger, Danger::Destructive);
+    }
+
+    #[test]
+    fn every_action_id_is_nonempty_and_unique() {
+        let mut probe = Probe::empty();
+        probe.git = true;
+        probe.docker = true;
+        probe.gradle = true;
+        probe.mise = true;
+        probe.brew = true;
+        probe.amp = true;
+        probe.idea = true;
+        probe.in_git_repo = true;
+        probe.has_docker_compose = true;
+        probe.has_gradle_build = true;
+        probe.child_git_repos = vec!["alpha".into(), "beta".into()];
+        probe.mise_tasks = vec![
+            MiseTask {
+                name: "build".into(),
+                description: String::new(),
+            },
+            MiseTask {
+                name: "test".into(),
+                description: String::new(),
+            },
+        ];
+        let menu = menu(&probe);
+        let ids: Vec<_> = menu
+            .groups
+            .iter()
+            .flat_map(|group| &group.actions)
+            .map(|action| action.id.as_str())
+            .collect();
+        let unique: HashSet<_> = ids.iter().copied().collect();
+
+        assert!(ids.iter().all(|id| !id.is_empty()));
+        assert_eq!(ids.len(), unique.len());
+    }
+
     fn test_action(id: &str, label: &str, danger: Danger) -> ActionSpec {
         let run = || -> ActionFuture { Box::pin(async { Ok(()) }) };
         ActionSpec::new(id, label, "", "", &[], danger, run)
+    }
+
+    fn searchable_action(
+        id: &str,
+        label: &str,
+        description: &str,
+        keywords: &'static [&'static str],
+    ) -> ActionSpec {
+        let run = || -> ActionFuture { Box::pin(async { Ok(()) }) };
+        ActionSpec::new(id, label, description, "", keywords, Danger::Safe, run)
+    }
+
+    fn has_accent(row: &ListRow<'_, ActionId>, theme: &Theme) -> bool {
+        row.label
+            .spans
+            .iter()
+            .any(|span| span.style == theme.style(Role::Accent))
     }
 
     #[test]
@@ -698,6 +832,21 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_only_query_keeps_grouped_projection() {
+        let menu = Menu::from_groups(vec![GroupSpec {
+            id: "first",
+            title: "First".into(),
+            actions: vec![test_action("one", "one", Danger::Safe)],
+        }]);
+
+        let rows = menu_rows(&menu, " \t ", &Theme::default());
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].role, RowRole::Separator);
+        assert_eq!(rows[1].id, "one");
+    }
+
+    #[test]
     fn adjacent_provider_contributions_share_one_group_header() {
         let menu = Menu::from_groups(vec![
             GroupSpec {
@@ -720,6 +869,43 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn fuzzy_highlight_keeps_combining_graphemes_atomic() {
+        let menu = Menu::from_groups(vec![GroupSpec {
+            id: "unicode",
+            title: "Unicode".into(),
+            actions: vec![test_action("accent", "e\u{301}clair", Danger::Safe)],
+        }]);
+
+        let rows = menu_rows(&menu, "e", &Theme::default());
+
+        assert!(
+            rows[0]
+                .label
+                .spans
+                .iter()
+                .any(|span| span.content == "e\u{301}")
+        );
+    }
+
+    #[test]
+    fn group_and_keyword_matches_have_visible_accents() {
+        let theme = Theme::default();
+        let menu = Menu::from_groups(vec![GroupSpec {
+            id: "docker",
+            title: "Docker".into(),
+            actions: vec![searchable_action(
+                "docker.stop",
+                "stop containers",
+                "Stop running containers",
+                &["cleanup"],
+            )],
+        }]);
+
+        assert!(has_accent(&menu_rows(&menu, "dock", &theme)[0], &theme));
+        assert!(has_accent(&menu_rows(&menu, "cleanup", &theme)[0], &theme));
     }
 
     #[test]

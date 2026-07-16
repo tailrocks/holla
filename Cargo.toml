@@ -27,6 +27,7 @@ tokio-stream = "0.1"
 futures = "0.3"
 libc = "0.2"
 nucleo-matcher = "0.3"
+unicode-segmentation = "1.12"
 
 [profile.release]
 opt-level = 3
