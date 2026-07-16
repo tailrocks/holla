@@ -1,17 +1,19 @@
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
+use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{
-    Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    layout::{Constraint, Layout},
+    text::Line,
 };
-use std::{io, time::Duration};
+use std::time::Duration;
+use termrock::{
+    keymap::{KeyBinding, KeyChord, Keymap, LogicalKey, Visibility},
+    scroll::DialogScroll,
+    style::{Role, Theme},
+    widgets::{
+        List, ListOutcome, ListRow, ListState, Panel, PanelEmphasis, RowRole, StatusBar,
+        StatusBarState, StatusSlot, Viewport, render_hint_bar,
+    },
+};
 
 use crate::probe::Probe;
 
@@ -322,99 +324,198 @@ async fn run_shell(cmd: &str) -> anyhow::Result<()> {
     .await
 }
 
+type ActionId = (usize, usize);
+
+#[derive(Clone, Copy, PartialEq)]
+enum MenuKey {
+    Navigate,
+    Run,
+    Quit,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum HeaderSlot {
+    Product,
+    Directory,
+}
+
+static MENU_KEYMAP: Keymap<MenuKey> = Keymap::new(&[
+    KeyBinding {
+        chords: &[
+            KeyChord::plain(LogicalKey::Up),
+            KeyChord::plain(LogicalKey::Down),
+        ],
+        action: MenuKey::Navigate,
+        hint: Some("navigate"),
+        visibility: Visibility::Shown,
+        glyph: Some("↑↓"),
+    },
+    KeyBinding {
+        chords: &[KeyChord::plain(LogicalKey::Enter)],
+        action: MenuKey::Run,
+        hint: Some("run"),
+        visibility: Visibility::Shown,
+        glyph: Some("⏎"),
+    },
+    KeyBinding {
+        chords: &[
+            KeyChord::plain(LogicalKey::Esc),
+            KeyChord::plain(LogicalKey::Char('q')),
+        ],
+        action: MenuKey::Quit,
+        hint: Some("quit"),
+        visibility: Visibility::Shown,
+        glyph: Some("esc/q"),
+    },
+]);
+
+fn menu_rows<'a>(menu: &'a Menu, theme: &Theme) -> Vec<ListRow<'a, ActionId>> {
+    let mut rows = Vec::new();
+    for (group_index, group) in menu.groups.iter().enumerate() {
+        rows.push(ListRow {
+            id: (group_index, usize::MAX),
+            label: Line::styled(
+                if group.icon.is_empty() {
+                    group.title.clone()
+                } else {
+                    format!("{} {}", group.icon, group.title)
+                },
+                theme.style(Role::TextMuted),
+            ),
+            role: RowRole::Separator,
+            enabled: false,
+        });
+        rows.extend(
+            group
+                .actions
+                .iter()
+                .enumerate()
+                .map(|(action_index, action)| ListRow {
+                    id: (group_index, action_index),
+                    label: Line::raw(action.label.as_str()),
+                    role: RowRole::Item,
+                    enabled: true,
+                }),
+        );
+    }
+    rows
+}
+
+fn preview_lines(menu: &Menu, selected: Option<ActionId>, theme: &Theme) -> Vec<Line<'static>> {
+    let Some((group_index, action_index)) = selected else {
+        return vec![Line::styled(
+            "No action selected",
+            theme.style(Role::TextMuted),
+        )];
+    };
+    let action = &menu.groups[group_index].actions[action_index];
+    let mut lines = vec![
+        Line::styled(action.label.clone(), theme.style(Role::Accent)),
+        Line::raw(""),
+        Line::styled(action.description.clone(), theme.style(Role::Text)),
+        Line::raw(""),
+        Line::styled("Command", theme.style(Role::TextMuted)),
+    ];
+    lines.extend(
+        action
+            .preview
+            .lines()
+            .map(|line| Line::styled(line.to_owned(), theme.style(Role::TextMuted))),
+    );
+    lines
+}
+
 pub async fn run(menu: Menu) -> anyhow::Result<()> {
     if menu.groups.is_empty() {
         println!("No supported tools or context detected.");
         return Ok(());
     }
 
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let theme = Theme::tailrocks_phosphor();
+    let rows = menu_rows(&menu, &theme);
+    let first_action = rows.iter().find(|row| row.enabled).map(|row| row.id);
+    let mut list_state = ListState::new(first_action);
+    let mut preview_scroll = DialogScroll::new();
+    let mut status_state = StatusBarState::default();
+    let cwd = std::env::current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
 
-    let mut group_idx: usize = 0;
-    let mut action_idx: usize = 0;
-    let mut focus_left = true;
-    let mut group_state = ListState::default();
-    let mut action_state = ListState::default();
-    group_state.select(Some(0));
-    action_state.select(Some(0));
+    let mut session = termrock::crossterm::Session::enter(
+        std::io::stdout(),
+        termrock::crossterm::SessionOptions::default(),
+    )?;
+    let backend = CrosstermBackend::new(session.writer_mut());
+    let mut terminal = ratatui::Terminal::new(backend)?;
 
     let result = loop {
-        let groups = &menu.groups;
-        let current_group = &groups[group_idx];
-        let action_count = current_group.actions.len();
-
         terminal.draw(|f| {
-            let area = f.area();
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(3),
-                    Constraint::Min(0),
-                    Constraint::Length(3),
-                ])
-                .split(area);
+            let [header_area, body_area, footer_area] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
+            .areas(f.area());
+            let [list_area, preview_area] =
+                Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .areas(body_area);
 
-            // header
-            let cwd = std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            let header = Paragraph::new(Line::from(vec![
-                Span::styled(
-                    " holla ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(&cwd, Style::default().fg(Color::DarkGray)),
-            ]))
-            .block(Block::default().borders(Borders::ALL));
-            f.render_widget(header, chunks[0]);
+            let left_slots = [StatusSlot {
+                id: HeaderSlot::Product,
+                content: " holla ",
+                priority: 2,
+                min_width: 0,
+                enabled: true,
+                style: theme.style(Role::Accent),
+                hover_style: None,
+            }];
+            let right_slots = [StatusSlot {
+                id: HeaderSlot::Directory,
+                content: &cwd,
+                priority: 1,
+                min_width: 8,
+                enabled: !cwd.is_empty(),
+                style: theme.style(Role::TextMuted),
+                hover_style: None,
+            }];
+            let status = StatusBar {
+                left: &left_slots,
+                right: &right_slots,
+                style: theme.style(Role::Surface),
+                alpha: 1.0,
+            };
+            f.render_stateful_widget(&status, header_area, &mut status_state);
 
-            // body: scope | actions | preview
-            let body = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(20),
-                    Constraint::Percentage(40),
-                    Constraint::Percentage(40),
-                ])
-                .split(chunks[1]);
-
-            render_groups(
-                f,
-                body[0],
-                groups,
-                group_idx,
-                focus_left,
-                &mut group_state.clone(),
+            let list_panel = Panel::new(&theme)
+                .title("Actions")
+                .emphasis(PanelEmphasis::Focused);
+            let list_inner = list_panel.inner(list_area);
+            f.render_widget(&list_panel, list_area);
+            f.render_stateful_widget(
+                &List {
+                    rows: &rows,
+                    theme: &theme,
+                },
+                list_inner,
+                &mut list_state,
             );
-            render_actions(
-                f,
-                body[1],
-                current_group,
-                action_idx,
-                !focus_left,
-                &mut action_state.clone(),
-            );
-            render_preview(f, body[2], current_group, action_idx);
 
-            // footer
-            let footer = Paragraph::new(Line::from(vec![
-                Span::styled(" ↑↓ ", Style::default().fg(Color::DarkGray)),
-                Span::raw("navigate  "),
-                Span::styled("→/Enter ", Style::default().fg(Color::DarkGray)),
-                Span::raw("select  "),
-                Span::styled("← ", Style::default().fg(Color::DarkGray)),
-                Span::raw("back  "),
-                Span::styled("q ", Style::default().fg(Color::DarkGray)),
-                Span::raw("quit"),
-            ]))
-            .block(Block::default().borders(Borders::ALL));
-            f.render_widget(footer, chunks[2]);
+            let preview = preview_lines(&menu, list_state.selected, &theme);
+            f.render_stateful_widget(
+                &Viewport {
+                    lines: &preview,
+                    title: Some("Preview"),
+                    content_style: theme.style(Role::Text),
+                    border_style: theme.style(Role::Border),
+                    title_style: theme.style(Role::Text),
+                    scroll_track_style: theme.style(Role::ScrollTrack),
+                    scroll_thumb_style: theme.style(Role::ScrollThumb),
+                },
+                preview_area,
+                &mut preview_scroll,
+            );
+
+            render_hint_bar(f, footer_area, &MENU_KEYMAP.hint_spans());
         })?;
 
         if event::poll(Duration::from_millis(100))?
@@ -423,172 +524,29 @@ pub async fn run(menu: Menu) -> anyhow::Result<()> {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
-            match key.code {
-                KeyCode::Char('q') => break None,
-                KeyCode::Up => {
-                    if focus_left {
-                        group_idx = group_idx.saturating_sub(1);
-                        action_idx = 0;
-                    } else {
-                        action_idx = action_idx.saturating_sub(1);
+            let key = termrock::input::KeyEvent::from(key);
+            let chord = KeyChord::from(key);
+            match list_state.handle_key(&rows, key) {
+                ListOutcome::Activated(id) => break Some(id),
+                ListOutcome::Cancelled => break None,
+                ListOutcome::Changed => preview_scroll = DialogScroll::new(),
+                ListOutcome::Ignored => {
+                    if MENU_KEYMAP.dispatch(chord) == Some(MenuKey::Quit) {
+                        break None;
                     }
                 }
-                KeyCode::Down => {
-                    if focus_left {
-                        group_idx = (group_idx + 1).min(menu.groups.len().saturating_sub(1));
-                        action_idx = 0;
-                    } else {
-                        action_idx = (action_idx + 1).min(action_count.saturating_sub(1));
-                    }
-                }
-                KeyCode::Right | KeyCode::Tab => focus_left = false,
-                KeyCode::Left => focus_left = true,
-                KeyCode::Enter => {
-                    if focus_left {
-                        focus_left = false;
-                    } else {
-                        break Some((group_idx, action_idx));
-                    }
-                }
-                _ => {}
             }
         }
     };
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    drop(terminal);
+    session.restore()?;
 
     if let Some((gi, ai)) = result {
         (menu.groups[gi].actions[ai].handler)().await?;
     }
 
     Ok(())
-}
-
-fn render_groups(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    groups: &[Group],
-    selected: usize,
-    focused: bool,
-    state: &mut ListState,
-) {
-    state.select(Some(selected));
-    let items: Vec<ListItem> = groups
-        .iter()
-        .map(|g| {
-            ListItem::new(Line::from(vec![
-                Span::raw(format!("{} ", g.icon)),
-                Span::raw(&g.title),
-            ]))
-        })
-        .collect();
-
-    let border_style = if focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(" Scope "),
-        )
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
-
-    f.render_stateful_widget(list, area, state);
-}
-
-fn render_actions(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    group: &Group,
-    selected: usize,
-    focused: bool,
-    state: &mut ListState,
-) {
-    state.select(Some(selected));
-    let items: Vec<ListItem> = group
-        .actions
-        .iter()
-        .map(|a| ListItem::new(Line::raw(&a.label)))
-        .collect();
-
-    let border_style = if focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(format!(" {} {} ", group.icon, group.title)),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(Color::Cyan)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
-
-    f.render_stateful_widget(list, area, state);
-}
-
-fn render_preview(f: &mut ratatui::Frame, area: Rect, group: &Group, selected: usize) {
-    let action = &group.actions[selected];
-
-    let text = vec![
-        Line::from(Span::styled(
-            &action.label,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::raw(""),
-        Line::from(Span::styled(
-            &action.description,
-            Style::default().fg(Color::White),
-        )),
-        Line::raw(""),
-        Line::from(Span::styled(
-            "Command",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::UNDERLINED),
-        )),
-    ]
-    .into_iter()
-    .chain(action.preview.lines().map(|l| {
-        Line::from(Span::styled(
-            l.to_owned(),
-            Style::default().fg(Color::Yellow),
-        ))
-    }))
-    .collect::<Vec<_>>();
-
-    let paragraph = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Preview "),
-        )
-        .wrap(Wrap { trim: false });
-
-    f.render_widget(paragraph, area);
 }
 
 #[cfg(test)]
@@ -736,5 +694,46 @@ mod tests {
 
         assert_eq!(action.description, "Show recent service logs");
         assert_eq!(action.preview, "$ docker compose logs --tail 200");
+    }
+
+    #[test]
+    fn menu_rows_flatten_groups_and_actions_with_stable_ids() {
+        fn action(label: &str) -> Action {
+            Action {
+                label: label.into(),
+                description: String::new(),
+                preview: String::new(),
+                handler: Box::new(|| Box::pin(async { Ok(()) })),
+            }
+        }
+
+        let menu = Menu {
+            groups: vec![
+                Group {
+                    title: "First".into(),
+                    icon: "",
+                    actions: vec![action("one"), action("two")],
+                },
+                Group {
+                    title: "Second".into(),
+                    icon: "",
+                    actions: vec![action("three"), action("four")],
+                },
+            ],
+        };
+
+        let rows = menu_rows(&menu, &termrock::Theme::default());
+
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[0].role, termrock::widgets::RowRole::Separator);
+        assert_eq!(rows[0].id, (0, usize::MAX));
+        assert!(!rows[0].enabled);
+        assert_eq!(rows[1].id, (0, 0));
+        assert_eq!(rows[2].id, (0, 1));
+        assert_eq!(rows[3].role, termrock::widgets::RowRole::Separator);
+        assert_eq!(rows[3].id, (1, usize::MAX));
+        assert!(!rows[3].enabled);
+        assert_eq!(rows[4].id, (1, 0));
+        assert_eq!(rows[5].id, (1, 1));
     }
 }
