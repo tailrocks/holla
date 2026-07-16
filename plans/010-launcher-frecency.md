@@ -147,7 +147,7 @@ Colocated modules per repo convention.
   atomic replacement so concurrent holla processes do not lose uses.
 - Completion gates: fmt, clippy `-D warnings`, 166 tests passed with 2
   intentional manual tests skipped, and build succeeded against TermRock
-  v0.10.0 `7f24de4`.
+  v0.10.0 `78d9671`.
 
 - Schema versioned; bump `"v"` on change and migrate-or-discard old files.
 - If per-project ranking is ever wanted, key = (project root hash,

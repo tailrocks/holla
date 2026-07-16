@@ -20,7 +20,7 @@ clap = { version = "4.6", features = ["derive", "color", "help", "usage"] }
 tokio = { version = "1.52", features = ["full"] }
 ratatui = "0.30.2"
 crossterm = { version = "0.29", features = ["event-stream"] }
-termrock = { git = "https://github.com/tailrocks/termrock.git", rev = "7f24de44af06a13ac6ce3c8624a363741c43daaa", features = ["crossterm"] }
+termrock = { git = "https://github.com/tailrocks/termrock.git", rev = "78d9671e7fbf539bf7cdc1af3c2a840d2dada904", features = ["crossterm"] }
 anyhow = "1.0"
 thiserror = "2.0"
 which = "8.0"
