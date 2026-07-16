@@ -14,6 +14,12 @@ Operator directives baked into every plan:
 - GPL-licensed references (Mole GPL-3.0, ncdu, gdu, macdirstat): **ideas
   and taxonomy only — never copy code.** Linkable deps must be
   Apache-2.0/MIT/BSD/MPL-2.0.
+- **Crate-first** (operator, 2026-07-16): prefer maintained,
+  license-compatible external crates over building our own — research the
+  crate and its alternatives before implementing anything in-house (e.g.
+  jwalk for walking, `trash` for trash, fff-core for file search,
+  nucleo-matcher for fuzzy matching, humansize/dirs/serde for utilities).
+  Hand-rolling needs a recorded justification.
 - Commits: Conventional Commits with DCO sign-off (`git commit -s`).
 
 ## Execution order & status
@@ -29,6 +35,12 @@ Operator directives baked into every plan:
 | 007 | TermRock extensions (multi-select, metadata cells, progress, log pane) | P2 | L | 003 | TODO |
 | 008 | Disk analyzer TUI + validated deletion choke point | P2 | L | 005, 006, 007 | TODO |
 | 009 | macOS cleanup insights taxonomy | P3 | L | 005, 006, 008 | TODO |
+| 010 | Launcher frecency ranking + query memory | P3 | M | 005 | TODO |
+| 011 | Disk speed pack: size cache, Spotlight top files, overview | P3 | M | 006, 008 | TODO |
+| 012 | File & folder finder (fff-core spike + integrate) | P3 | L | 005 | TODO |
+| 013 | User-defined actions + scriptable CLI (`list`/`run`/`doctor`) | P3 | M | 005 | TODO |
+| 014 | Provider expansion: node/just/make/task, cargo, brew services, git hygiene | P3 | M | 005 | TODO |
+| 015 | Linux port readiness (design/spike + bootable slice) | P3 | L | 005 (006/008 soft) | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale)
@@ -47,9 +59,18 @@ REJECTED (with one-line rationale)
   later.
 - 008 introduces `src/cleanup/` — the single deletion choke point; 009
   builds on it and migrates the legacy gradle/idea deleters to it.
+- 010–015 are the extension wave (operator request 2026-07-16: "what else
+  can we add, following the original purpose"). All depend on 005's
+  provider/action model; none blocks the core 001–009 sequence. Suggested
+  order within the wave: 013 → 014 → 010 → 011 → 012 → 015 (config+CLI
+  makes everything scriptable/testable; providers widen the launcher;
+  intelligence and finder polish it; Linux readiness closes the wave).
+- 012 starts with a hard spike gate (fff-core adoption decision) — its
+  verdict is recorded inside the plan file.
 - Selection default if run non-interactively: plans were written for the
   full operator-requested scope (termrock migration, launcher, disk
-  analyzer, cleanup taxonomy) — all 9 selected by the operator's brief.
+  analyzer, cleanup taxonomy, extension wave) — all selected by the
+  operator's briefs.
 
 ## Findings considered and rejected / deferred
 
@@ -62,17 +83,20 @@ REJECTED (with one-line rationale)
   holla matches hundreds of items, not millions; `nucleo-matcher` is the
   maintained, boring choice (plan 005 records the reasoning).
 - **Embedding `pdu`/`dua` as the scan engine** — rejected: pdu is
-  batch-only (no streaming), dua isn't a library; own engine per plan 006.
-- **`jwalk`/`rayon` walker** — rejected in favor of a fixed worker pool +
-  `DirReader` trait (custom stat handling, per-thread dataless policy);
-  plan 006 records the friction-report escape hatch.
+  batch-only (no streaming), dua isn't a library; holla's engine (plan 006)
+  is built ON `jwalk`+`rayon` per the crate-first directive (an earlier
+  hand-rolled-pool decision was REVERSED 2026-07-16 when the directive
+  landed; plan 006 now specifies jwalk with a pinned rayon pool).
 - **Finder/AppleScript trash integration (Mole's approach)** — rejected:
-  requires GUI session; rename-into-`~/.Trash` is SSH-safe (plan 008).
+  requires GUI session. Superseded by the `trash` crate (plan 008), which
+  uses proper platform APIs without AppleScript and covers XDG trash for
+  the Linux port (an earlier manual rename-into-`~/.Trash` decision was
+  REVERSED by the crate-first directive).
 - **sudo/system-domain cleanup, app-uninstall residue, Time Machine
-  snapshot reporting, Spotlight `mdfind` large-file discovery, size
-  caching between runs, frecency ranking for the launcher** — deferred
-  with reasons in plans 008/009 maintenance notes; none blocks the core
-  flows.
+  snapshot reporting** — still deferred with reasons in plans 008/009
+  maintenance notes. **Promoted to plans on operator request (2026-07-16)**:
+  Spotlight `mdfind` large files + size caching → plan 011; frecency
+  ranking → plan 010; fff file finding → plan 012.
 - **`has_mise_toml` dead-code field in Probe** — dies naturally in plan
   005's provider refactor; not worth a standalone fix.
 

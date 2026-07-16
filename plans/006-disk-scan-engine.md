@@ -82,12 +82,22 @@ macOS facts the engine must honor:
    (`pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0)`) on
    workers — measured 2-4× wins in fff; guard behind `#[cfg(target_os =
    "macos")]`.
-7. Walker: hand-rolled recursive walk on a fixed worker pool (pdu-style)
-   with `std::fs::read_dir` + `symlink_metadata`. Do NOT follow symlinks.
-   `jwalk` was considered and rejected: we need per-directory aggregation
-   + custom stat handling + dataless policy per thread — a bespoke pool is
-   simpler than fighting jwalk's per-dir rayon model. Linux later gets a
-   `getdents64`/`statx` fast path behind the same trait.
+7. Walker: **`jwalk` 0.8 (MIT) on a custom `rayon` pool** — operator
+   directive: prefer maintained external crates over hand-rolling. jwalk is
+   proven for exactly this job (dua-cli streams its interactive tree from
+   jwalk); it gives per-directory parallelism with streamed results. The
+   macOS per-thread requirements (dataless iopolicy + QoS pin) attach at
+   pool construction: build `rayon::ThreadPoolBuilder::new()
+   .num_threads(workers).start_handler(|_| platform::init_scan_thread())`
+   and hand it to jwalk via `Parallelism::RayonExistingPool`. Do NOT follow
+   symlinks (`follow_links(false)`, default). Custom per-entry stat work
+   happens in jwalk's `process_read_dir` callback. If jwalk 0.8's API lacks
+   `RayonExistingPool` or an equivalent hook for the pinned pool, fall back
+   to `Parallelism::RayonNewPool(workers)` + calling
+   `platform::init_scan_thread()` at the top of `process_read_dir`
+   (idempotent per-thread via `thread_local!` guard) — note which variant
+   shipped. Linux later gets `getdents64`/`statx` tuning inside the same
+   callback seam.
 
 ### Design (implement exactly)
 
@@ -142,15 +152,16 @@ the channel never floods. Cumulative sizes propagate to ancestors on each
 directory completion (walk parent chain adding deltas — arena makes this
 cheap).
 
-Platform seam: `trait DirReader { fn read(&self, path, &mut dyn FnMut(RawEntry)) -> io::Result<()> }`
-with `StdDirReader` (read_dir + symlink_metadata) as the only impl now.
+Platform seam: `src/du/platform.rs` owns `init_scan_thread()` (iopolicy +
+QoS, macOS-only, no-op elsewhere) and `default_workers()` (perf-core
+sysctl with `available_parallelism()` fallback). Entry metadata is
+extracted in the jwalk `process_read_dir` callback into
 `RawEntry { name, file_type, on_disk, apparent, nlink, dev, ino, is_dataless }`.
 
-New dependencies: `libc = "0.2"` (iopolicy, qos, sysctl), `dashmap = "6"`
-(hardlink set). NO rayon (fixed pool of `std::thread` workers +
-`crossbeam-channel`-style work queue built on `std::sync::mpsc` — if a work
-queue needs multi-consumer, add `crossbeam-channel = "0.5"`; that's
-allowed).
+New dependencies (crate-first per operator directive): `jwalk = "0.8"`
+(MIT), `rayon = "1"` (MIT/Apache-2.0), `libc = "0.2"` (iopolicy, qos,
+sysctl — no maintained safe wrapper covers these three), `dashmap = "6"`
+(MIT, hardlink set).
 
 ## Commands you will need
 
@@ -176,8 +187,8 @@ allowed).
 - Deletion of any kind (plan 008 owns the delete choke point).
 - Pattern/mask grouping of results ("all node_modules") — plan 008/009
   layer that on top of the tree.
-- Linux fast path (`getdents64`/`statx`) — the `DirReader` trait is the
-  seam; do not implement it now.
+- Linux fast path (`getdents64`/`statx`) — the jwalk callback is the seam;
+  do not implement it now.
 
 ## Git workflow
 
@@ -200,12 +211,13 @@ completed dir is fine, test it completes fast).
 
 **Verify**: `cargo nextest run --all-features` → tree tests pass.
 
-### Step 2: Walker on a fixed pool with cancellation
+### Step 2: jwalk walker with cancellation
 
-Work-queue of directories; N workers pop, `DirReader::read`, push child
-dirs, update tree, honor `cancel` between directories. Fixture tests build
-temp trees under `std::env::temp_dir()` (use `tempfile`? — no: create/remove
-manually with std to avoid a new dep; a small helper in the test module) —
+Wire jwalk per design fact 7: pinned rayon pool, `process_read_dir`
+extracting `RawEntry`s and updating the tree, `cancel` checked per
+directory unit (return early / skip children when set). Fixture tests build
+temp trees via the `tempfile` crate (`tempfile = "3"`, MIT/Apache-2.0 —
+dev-dependency; crate-first directive applies to test helpers too) —
 create ~100 files of known sizes across nested dirs, scan, assert
 `on_disk`/`apparent`/`entry_count` totals and `Finished` event. Cancellation
 test: huge synthetic breadth (many empty dirs), set cancel after first
@@ -225,10 +237,11 @@ assert total counts it once.
 
 ### Step 4: macOS specifics behind `#[cfg(target_os = "macos")]`
 
-- Worker startup: `setiopolicy_np` dataless-off (fact 4) + optional QoS pin
-  (fact 6). Both via `libc` FFI — this is the ONE place `unsafe` is
-  permitted; keep each call in a tiny documented wrapper in
-  `src/du/platform.rs`.
+- `platform::init_scan_thread()`: `setiopolicy_np` dataless-off (fact 4) +
+  optional QoS pin (fact 6). Both via `libc` FFI — this is the ONE place
+  `unsafe` is permitted; keep each call in a tiny documented wrapper in
+  `src/du/platform.rs`. Wired into the rayon pool `start_handler` (or the
+  thread-local fallback) from Step 2.
 - Default `skip_paths`: `/System/Volumes/Data` (when root == `/`),
   `~/Library/Mobile Documents` prefix match.
 - Worker count: sysctl `hw.perflevel0.logicalcpu` wrapper with
@@ -276,8 +289,10 @@ after `src/probe.rs` test module (002).
 
 ## STOP conditions
 
-- You want to pull in `jwalk`/`rayon` after all — the trait-and-pool design
-  is a decision; report friction instead of switching.
+- jwalk 0.8 cannot express BOTH the pinned pool AND per-entry stat
+  collection (neither `RayonExistingPool` nor the thread-local fallback
+  works) — report the exact API friction; do not silently hand-roll a
+  walker (that reverses an operator directive).
 - `setiopolicy_np` or QoS constants are missing from the `libc` crate
   version — report (don't hand-define syscall numbers).
 - Fixture tests behave differently on the CI ubuntu runner in ways that
@@ -289,8 +304,9 @@ after `src/probe.rs` test module (002).
 - Plan 008 consumes `ScanHandle` and renders the tree; plan 009 reuses
   `scan()` pointed at known cache roots for sizing insights. Keep the
   engine UI-free.
-- The `DirReader` trait is where Linux `getdents64`/`statx` and a future
-  macOS `getattrlistbulk` fast path land — benchmark before adding either.
+- The jwalk `process_read_dir` callback is where Linux `getdents64`/`statx`
+  tuning and a future macOS `getattrlistbulk` fast path land — benchmark
+  before adding either.
 - Clone/CoW (APFS clonefile) sharing is intentionally NOT dedup'd (no
   public API); document in 008's UI copy ("sizes may overcount cloned
   files"). Purgeable space is likewise invisible — 008 shows the

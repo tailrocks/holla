@@ -110,10 +110,14 @@ After the dependency plans land:
      `$HOME` itself, `/var/db`; symlinks: delete the LINK only, never
      resolve-and-delete-target; reject empty path components (guards the
      `"$dir/$name"` empty-var collapse class).
-   - `Trash` mode: rename into `~/.Trash/<name>` (uniquify on collision:
-     `name 2`, `name 3`, …). If rename fails with EXDEV (other volume),
-     report as `skipped` with reason "cross-volume — use permanent mode"
-     (do NOT silently copy+delete). No Finder/AppleScript dependency.
+   - `Trash` mode: use the **`trash` crate** (crates.io `trash`, latest 5.x;
+     dual MIT/Apache-2.0 — VERIFY the license in its Cargo.toml before
+     adding, STOP if it changed). Crate-first operator directive: it uses
+     the proper macOS API (Finder "Put Back" metadata preserved), handles
+     collisions, needs no GUI session, and already implements the XDG trash
+     spec for the future Linux port. On a `trash` error for an item, report
+     it as `failed` with the error string (do NOT fall back to permanent
+     deletion).
    - `Permanent` mode: `std::fs::remove_dir_all`/`remove_file` — only
      reachable via an extra toggle in the confirm dialog.
    - `dry_run` short-circuits INSIDE `execute` (structural, per PRODUCT.md),
@@ -156,10 +160,12 @@ After the dependency plans land:
 - `src/providers/disk.rs` (new), registry registration
 - `src/tui/analyzer.rs` (new screen)
 - `src/cleanup/mod.rs` (+ `validate.rs`, `trash.rs` as needed — new)
-- `Cargo.toml` — ideally NO new deps (trash via rename; JSON lines via
-  hand-rolled `format!` with escaping, or `serde_json` if already
-  transitively present — check `cargo tree`; if adding, prefer
-  `serde_json` explicitly, it's ubiquitous)
+- `Cargo.toml` — new deps per the crate-first directive: `trash` (5.x,
+  verify MIT/Apache-2.0), `serde`+`serde_json` (ops.log lines and report
+  structs), `humansize` (2.x, MIT/Apache-2.0 — byte formatting like
+  "12.4 GB"; do not hand-roll humanizers), `dirs` (MIT/Apache-2.0 — cache
+  dir resolution honoring XDG) — check `cargo tree` first for what's
+  already transitive
 - Re-pin termrock rev to include 007's features
 
 **Out of scope**:
@@ -188,10 +194,11 @@ Write the validator tests BEFORE the implementation — adversarial corpus
 `~/.Trash` itself, `/usr/local/foo` (allowed), `/usr/bin/x` (denied),
 relative paths, paths with `..`, empty components (`/Users//`), symlink
 cases, non-existent paths (validate passes; execute reports failed),
-unicode names, names with newlines. Then `execute` with tempdir fixtures:
-trash-rename works + uniquifies; permanent removes; dry_run touches
-nothing (assert files still exist); report accounting exact; ops.log line
-appended.
+unicode names, names with newlines. Then `execute` with tempdir fixtures
+(`tempfile` dev-dep): trash mode moves items out of place (assert gone from
+source; trash-side location is platform-owned — don't assert its internal
+layout); permanent removes; dry_run touches nothing (assert files still
+exist); report accounting exact; ops.log line appended.
 
 **Verify**: `cargo nextest run --all-features` → ≥20 new cleanup tests pass.
 
@@ -269,8 +276,9 @@ skips `validate`; (3) confirm dialog cannot default-activate Delete
 - You are tempted to add ANY delete/rename outside `src/cleanup/`.
 - `ScanHandle`'s API (006) doesn't fit the screen's needs — report the gap;
   don't fork engine logic into the UI.
-- Trash rename semantics on APFS behave unexpectedly in smoke (e.g.
-  cross-volume `~/.Trash`) — report with the exact errno.
+- The `trash` crate's license changed from MIT/Apache-2.0, or its macOS
+  behavior surprises in smoke (items not in Trash, no Put Back) — report
+  exactly what happened.
 - Any test in the validator corpus fails and the fix would WEAKEN a rule.
 
 ## Maintenance notes

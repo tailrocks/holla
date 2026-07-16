@@ -173,7 +173,11 @@ choke point — replacing the legacy `find -exec rm` in
   (additions only; loosening any rule is a STOP condition)
 - `src/commands/gradle.rs`, `src/commands/idea.rs` — migrate legacy
   `find -exec rm` deletion to the choke point
-- `Cargo.toml` — no new deps expected (pgrep via `std::process::Command`)
+- `Cargo.toml` — crate-first directive: prefer `sysinfo` (MIT) for
+  running-process detection (`skip_if_running`) over shelling `pgrep` —
+  it's cross-platform (pays off at the Linux port). If `sysinfo`'s startup
+  cost for a one-shot process check proves heavy (>50 ms), shelling
+  `pgrep -x` is the acceptable fallback; record which shipped.
 
 **Out of scope**:
 - sudo/system-domain cleanup (`/Library/Caches`, `/private/var/*`) —
@@ -273,8 +277,8 @@ enumerate-then-delete on fixtures, 2+). ≥20 new tests.
 - [ ] ReviewFirst rows never preselected; too-recent rows disabled not
       hidden (UI code + manual smoke).
 - [ ] `skip_if_running` produces `skipped` outcomes, not failures (test
-      with a fake process name that IS running: use `pgrep -x` against the
-      test runner's own process name for a deterministic positive).
+      against the test runner's own process name for a deterministic
+      positive, via whichever detection mechanism shipped).
 - [ ] Four gates exit 0; ≥20 new tests; smoke recorded.
 - [ ] `plans/README.md` status row updated.
 
