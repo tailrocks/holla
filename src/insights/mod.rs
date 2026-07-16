@@ -5,9 +5,11 @@ use std::{
 };
 
 mod artifacts;
+mod process;
 mod sizing;
 
 pub use artifacts::{Artifact, classify_artifact, collect_artifacts, default_project_roots};
+pub use process::is_process_running;
 pub use sizing::{Candidate, SizeEvent, SizeHandle, size};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
