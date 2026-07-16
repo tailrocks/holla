@@ -141,10 +141,10 @@ pub async fn run(filter: Option<&'static str>) -> anyhow::Result<()> {
         let detail_rows = detail
             .and_then(|id| views.iter().find(|view| view.spec.id == id))
             .map_or_else(Vec::new, |view| candidate_rows(view, &theme));
-        if detail.is_none() && overview_state.selected.is_none() {
+        if detail.is_none() && overview_state.selected().is_none() {
             overview_state.select(overview_rows.first().map(|row| row.id));
         }
-        if detail.is_some() && detail_state.selected.is_none() {
+        if detail.is_some() && detail_state.selected().is_none() {
             detail_state.select(
                 detail_rows
                     .iter()
@@ -153,7 +153,7 @@ pub async fn run(filter: Option<&'static str>) -> anyhow::Result<()> {
             );
             preselect_detail(&views, detail, &mut detail_state);
         }
-        let selected_spec = detail.or(overview_state.selected);
+        let selected_spec = detail.or(overview_state.selected().copied());
         let explanation = selected_spec
             .and_then(insights::spec)
             .map_or("No cleanup category selected", |spec| spec.explain);

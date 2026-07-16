@@ -454,7 +454,7 @@ pub async fn run() -> anyhow::Result<()> {
         );
         if !rows
             .iter()
-            .any(|row| row.enabled && list_state.selected.as_ref().is_some_and(|id| id == &row.id))
+            .any(|row| row.enabled && list_state.selected().is_some_and(|id| id == &row.id))
         {
             list_state.select(
                 rows.iter()
@@ -462,8 +462,8 @@ pub async fn run() -> anyhow::Result<()> {
                     .map(|row| row.id.clone()),
             );
         }
-        list_state.focused = !preview_focused;
-        let preview = preview_lines(&menu, list_state.selected.as_ref(), &theme);
+        list_state.set_focused(!preview_focused);
+        let preview = preview_lines(&menu, list_state.selected(), &theme);
         let preview_width = max_line_width(&preview);
         let mut preview_viewport = (0usize, 0usize);
 

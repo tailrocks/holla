@@ -96,7 +96,7 @@ pub async fn run() -> anyhow::Result<()> {
         let rows = result_rows(&hits, &theme);
         if !rows
             .iter()
-            .any(|row| list_state.selected.as_ref() == Some(&row.id))
+            .any(|row| list_state.selected() == Some(&row.id))
         {
             list_state.select(rows.first().map(|row| row.id.clone()));
         }

@@ -930,7 +930,7 @@ async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Res
         let root_bytes = projection.sizes.get(&root).copied().unwrap_or_default();
         let rows = projection.rows;
         let top_rows = top_file_rows(top_files.as_ref());
-        if top_state.selected.is_none() {
+        if top_state.selected().is_none() {
             top_state.select(top_rows.first().map(|row| row.id));
         }
         let (top_selected, top_selected_bytes) = selected_top_files(top_files.as_ref(), &top_state);
