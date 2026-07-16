@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::mpsc};
+use std::{collections::HashMap, path::PathBuf, sync::mpsc};
 
 use humansize::{DECIMAL, format_size};
 use ratatui::text::{Line, Text};
@@ -252,18 +252,23 @@ impl CleanupFlow {
                         let _ = std::process::Command::new("gradle").arg("--stop").status();
                     }
                     let mut report = DeleteReport::default();
+                    let mut running = HashMap::new();
                     for item in items {
                         let plan = DeletePlan {
                             items: vec![item.path],
                             mode,
                             dry_run,
                         };
-                        let item_report =
-                            if item.policy.skip_if_running.is_some_and(is_process_running) {
-                                execute_skipped(&plan, "App is running")
-                            } else {
-                                execute(&plan)
-                            };
+                        let blocked = item.policy.skip_if_running.is_some_and(|name| {
+                            *running
+                                .entry(name)
+                                .or_insert_with(|| is_process_running(name))
+                        });
+                        let item_report = if blocked {
+                            execute_skipped(&plan, "App is running")
+                        } else {
+                            execute(&plan)
+                        };
                         report.removed.extend(item_report.removed);
                         report.failed.extend(item_report.failed);
                         report.skipped.extend(item_report.skipped);
