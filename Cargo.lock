@@ -773,8 +773,8 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fff-grep"
-version = "0.9.6"
-source = "git+https://github.com/dmtrKovalenko/fff.git?rev=42f38ff66e6c62475678f05ee60c3a311e341884#42f38ff66e6c62475678f05ee60c3a311e341884"
+version = "0.10.0"
+source = "git+https://github.com/dmtrKovalenko/fff.git?rev=31be2242234df9eb44851f3a59bf007e96986a44#31be2242234df9eb44851f3a59bf007e96986a44"
 dependencies = [
  "bstr",
  "memchr",
@@ -796,13 +796,13 @@ dependencies = [
 
 [[package]]
 name = "fff-query-parser"
-version = "0.9.6"
-source = "git+https://github.com/dmtrKovalenko/fff.git?rev=42f38ff66e6c62475678f05ee60c3a311e341884#42f38ff66e6c62475678f05ee60c3a311e341884"
+version = "0.10.0"
+source = "git+https://github.com/dmtrKovalenko/fff.git?rev=31be2242234df9eb44851f3a59bf007e96986a44#31be2242234df9eb44851f3a59bf007e96986a44"
 
 [[package]]
 name = "fff-search"
-version = "0.9.6"
-source = "git+https://github.com/dmtrKovalenko/fff.git?rev=42f38ff66e6c62475678f05ee60c3a311e341884#42f38ff66e6c62475678f05ee60c3a311e341884"
+version = "0.10.0"
+source = "git+https://github.com/dmtrKovalenko/fff.git?rev=31be2242234df9eb44851f3a59bf007e96986a44#31be2242234df9eb44851f3a59bf007e96986a44"
 dependencies = [
  "ahash",
  "aho-corasick",
@@ -3285,7 +3285,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

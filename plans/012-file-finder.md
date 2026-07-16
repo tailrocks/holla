@@ -116,7 +116,7 @@ answers + chosen path, committed
   crates.io; `fff` `0.3.1` is an unrelated finite-fields crate. The official
   repository does contain `crates/fff-core`, whose package name is
   `fff-search`, version `0.9.6`, MIT, Rust 2024 edition. Holla therefore uses
-  the operator-requested repository directly, pinned to exact current `main`
+  the operator-requested repository directly, initially pinned to exact `main`
   SHA `42f38ff66e6c62475678f05ee60c3a311e341884`.
 - API fit: current upstream has synchronous `fuzzy_search_mixed`, a
   shared-state background scanner, score data, and file match-byte offsets. A
@@ -135,7 +135,7 @@ answers + chosen path, committed
 - Platform: exact `fff-search 0.9.7-nightly.fce72fa` compiled successfully on
   macOS arm64 with the project's current exact Rust 1.97.1 toolchain; no
   platform failure drove the decision.
-- **Chosen path**: exact Git `fff-search` at
+- **Chosen path at adoption**: exact Git `fff-search` at
   `42f38ff66e6c62475678f05ee60c3a311e341884`. The measured crates.io release
   exceeds the original footprint threshold, but the operator explicitly
   overrode that gate and requested the official Git source when the core crate
@@ -206,6 +206,14 @@ registration (1), highlight projection (2). UI: manual smoke per policy.
 - PTY smoke: opened `find.files`, queried `Cargo.toml` while the indexed-file
   counter continued rising, received 100 ranked results, opened/cancelled the
   action dialog, cleared the query, and exited with terminal restoration.
+
+### Dependency migration history
+
+- 2026-07-17: `42f38ff66e6c62475678f05ee60c3a311e341884` →
+  `31be2242234df9eb44851f3a59bf007e96986a44` (`fff-search` 0.10.0). Upstream
+  publishes no migration guide. The release adds public watcher subscriptions;
+  Holla keeps `watch = false`, and its existing picker/search API is unchanged.
+  Repin accepted only after finder tests and the full project gates passed.
 
 ## STOP conditions
 
