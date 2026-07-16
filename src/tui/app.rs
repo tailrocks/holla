@@ -2,7 +2,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Layout},
-    text::{Line, Text},
+    text::{Line, Span, Text},
 };
 use std::{
     process::Stdio,
@@ -34,6 +34,7 @@ use tokio::{
 pub enum TaskState {
     Pending,
     Running,
+    Cancelling,
     Done(bool),
 }
 
@@ -78,7 +79,71 @@ impl TaskHandle {
         // SAFETY: `pid` is the positive id returned by the child we placed in
         // its own process group. Negating it targets only that group. SIGTERM
         // does not access Rust memory and the return value is checked.
-        unsafe { libc::kill(-pid, libc::SIGTERM) == 0 }
+        let sent = unsafe { libc::kill(-pid, libc::SIGTERM) == 0 };
+        if sent {
+            let process_groups = Arc::clone(&self.process_groups);
+            let task = self.task;
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(750)).await;
+                let still_running = process_groups.lock().expect("process group lock")[task]
+                    == u32::try_from(pid).ok();
+                if still_running {
+                    // SAFETY: the executor still records this exact child-owned
+                    // process group. Escalation prevents TERM-resistant children
+                    // from surviving cancellation.
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                }
+            });
+        }
+        sent
+    }
+}
+
+struct TaskSupervisor {
+    handles: Vec<TaskHandle>,
+    armed: bool,
+}
+
+impl TaskSupervisor {
+    fn new(handles: Vec<TaskHandle>) -> Self {
+        Self {
+            handles,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TaskSupervisor {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        for handle in &self.handles {
+            let _ = handle.cancel();
+        }
+        std::thread::sleep(Duration::from_millis(750));
+        let groups = self.handles.first().map(|handle| {
+            handle
+                .process_groups
+                .lock()
+                .expect("process group lock")
+                .clone()
+        });
+        for pid in groups.into_iter().flatten().flatten() {
+            if let Ok(pid) = i32::try_from(pid) {
+                // SAFETY: shutdown escalation targets only process groups still
+                // owned by this supervisor.
+                unsafe {
+                    libc::kill(-pid, libc::SIGKILL);
+                }
+            }
+        }
     }
 }
 
@@ -294,17 +359,17 @@ async fn run_task(
         }
     };
 
+    let mut registered_pgid = None;
     if let Some(pid) = child.id() {
+        registered_pgid = i32::try_from(pid).ok();
         process_groups.lock().expect("process group lock")[task] = Some(pid);
         if cancelled.load(Ordering::Acquire) {
-            let Ok(pid) = i32::try_from(pid) else {
-                return;
-            };
-            // SAFETY: child was placed in a new process group whose id equals
-            // its positive pid; negative pid targets that group only.
-            unsafe {
-                libc::kill(-pid, libc::SIGTERM);
+            let _ = TaskHandle {
+                task,
+                process_groups: Arc::clone(&process_groups),
+                cancelled: Arc::clone(&cancelled),
             }
+            .cancel();
         }
     }
 
@@ -317,6 +382,11 @@ async fn run_task(
         .take()
         .map(|stderr| tokio::spawn(stream_lines(task, stderr, tx.clone())));
     let status = child.wait().await;
+    if cancelled.load(Ordering::Acquire)
+        && let Some(pgid) = registered_pgid
+    {
+        reap_process_group(pgid).await;
+    }
     if let Some(reader) = stdout_reader {
         let _ = reader.await;
     }
@@ -328,6 +398,24 @@ async fn run_task(
         task,
         success: !cancelled.load(Ordering::Acquire) && status.is_ok_and(|status| status.success()),
     });
+}
+
+async fn reap_process_group(pgid: i32) {
+    // SAFETY: this is the positive id of the process group created for the
+    // cancelled task. Killing the whole group removes descendants even when
+    // the direct child already exited or closed its output pipes.
+    unsafe {
+        libc::kill(-pgid, libc::SIGKILL);
+    }
+    while process_group_exists(pgid) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+fn process_group_exists(pgid: i32) -> bool {
+    // SAFETY: signal 0 performs existence/permission checking only.
+    let result = unsafe { libc::kill(-pgid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 async fn stream_lines(task: usize, stream: impl AsyncRead + Unpin, tx: mpsc::Sender<TaskEvent>) {
@@ -354,7 +442,12 @@ async fn stream_lines(task: usize, stream: impl AsyncRead + Unpin, tx: mpsc::Sen
 fn apply_event(tasks: &mut [RunningTask], event: TaskEvent) {
     match event {
         TaskEvent::Started { task } => tasks[task].state = TaskState::Running,
-        TaskEvent::Line { task, line } => tasks[task].lines.push(line),
+        TaskEvent::Line { task, line } => {
+            if tasks[task].tail.offset() > 0 {
+                tasks[task].tail = TailScroll::new(tasks[task].tail.offset().saturating_add(1));
+            }
+            tasks[task].lines.push(line);
+        }
         TaskEvent::Done { task, success } => tasks[task].state = TaskState::Done(success),
     }
 }
@@ -375,9 +468,14 @@ fn cancel_tasks(tasks: &mut [RunningTask], handles: &[TaskHandle]) {
     for task in tasks {
         if !matches!(task.state, TaskState::Done(_)) {
             task.lines.push("cancelled".into());
-            task.state = TaskState::Done(false);
+            task.state = TaskState::Cancelling;
         }
     }
+}
+
+fn scroll_selected(task: &mut RunningTask, viewport_height: usize, delta: isize) {
+    let filled = task.lines.len().saturating_sub(viewport_height);
+    task.tail.scroll_by(filled, delta);
 }
 
 async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> {
@@ -396,7 +494,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
         })
         .collect();
     let (tx, rx) = mpsc::channel();
-    let handles = spawn_tasks(task_defs, parallel, tx);
+    let mut supervisor = TaskSupervisor::new(spawn_tasks(task_defs, parallel, tx));
     let mut events = StdSubscription(rx);
     let theme = Theme::tailrocks_phosphor();
     let mut selected = 0usize;
@@ -449,7 +547,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
 
             let running = tasks
                 .iter()
-                .filter(|task| task.state == TaskState::Running)
+                .filter(|task| matches!(task.state, TaskState::Running | TaskState::Cancelling))
                 .count();
             let ok = tasks
                 .iter()
@@ -504,10 +602,11 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                     id: index,
                     label: task.label.as_str(),
                     glyph: Some(match task.state {
-                        TaskState::Pending => "○",
-                        TaskState::Running => "◉",
-                        TaskState::Done(true) => "✓",
-                        TaskState::Done(false) => "✗",
+                        TaskState::Pending => Span::styled("○", theme.style(Role::TextMuted)),
+                        TaskState::Running => Span::styled("◉", theme.style(Role::Accent)),
+                        TaskState::Cancelling => Span::styled("✗", theme.style(Role::Danger)),
+                        TaskState::Done(true) => Span::styled("✓", theme.style(Role::Success)),
+                        TaskState::Done(false) => Span::styled("✗", theme.style(Role::Danger)),
                     }),
                     active: index == selected,
                     enabled: true,
@@ -591,7 +690,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
             if let Some(dialog_state) = cancel_dialog.as_mut() {
                 match dialog_state.handle_key(key, &cancel_actions) {
                     Outcome::Activated(CancelChoice::Stop) => {
-                        cancel_tasks(&mut tasks, &handles);
+                        cancel_tasks(&mut tasks, &supervisor.handles);
                         cancel_dialog = None;
                     }
                     Outcome::Activated(CancelChoice::KeepRunning) | Outcome::Cancelled => {
@@ -613,36 +712,24 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                         .min(tasks.len().saturating_sub(1));
                 }
                 RunnerKey::ScrollUp => {
-                    let filled = tasks[selected]
-                        .lines
-                        .len()
-                        .saturating_sub(output_viewport_height);
-                    tasks[selected].tail.scroll_by(filled, 1);
+                    scroll_selected(&mut tasks[selected], output_viewport_height, 1);
                 }
                 RunnerKey::ScrollDown => {
-                    let filled = tasks[selected]
-                        .lines
-                        .len()
-                        .saturating_sub(output_viewport_height);
-                    tasks[selected].tail.scroll_by(filled, -1);
+                    scroll_selected(&mut tasks[selected], output_viewport_height, -1);
                 }
                 RunnerKey::PageUp => {
-                    let filled = tasks[selected]
-                        .lines
-                        .len()
-                        .saturating_sub(output_viewport_height);
-                    tasks[selected]
-                        .tail
-                        .scroll_by(filled, output_viewport_height as isize);
+                    scroll_selected(
+                        &mut tasks[selected],
+                        output_viewport_height,
+                        output_viewport_height as isize,
+                    );
                 }
                 RunnerKey::PageDown => {
-                    let filled = tasks[selected]
-                        .lines
-                        .len()
-                        .saturating_sub(output_viewport_height);
-                    tasks[selected]
-                        .tail
-                        .scroll_by(filled, -(output_viewport_height as isize));
+                    scroll_selected(
+                        &mut tasks[selected],
+                        output_viewport_height,
+                        -(output_viewport_height as isize),
+                    );
                 }
                 RunnerKey::FollowTail => tasks[selected].tail = TailScroll::default(),
                 RunnerKey::Quit if done => break,
@@ -655,13 +742,14 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
 
     drop(terminal);
     session.restore()?;
+    supervisor.disarm();
 
     println!("\n{}", "─".repeat(50));
     for task in &tasks {
         let (icon, status) = match task.state {
             TaskState::Done(true) => ("✓", "ok"),
             TaskState::Done(false) => ("✗", "failed"),
-            TaskState::Pending | TaskState::Running => ("?", "unknown"),
+            TaskState::Pending | TaskState::Running | TaskState::Cancelling => ("?", "unknown"),
         };
         println!("  {icon}  {}  [{status}]", task.label);
     }
@@ -695,7 +783,7 @@ mod tests {
             vec![TaskDef::new(
                 "mixed output",
                 "sh",
-                &["-c", "echo a; echo b 1>&2; exit 3"],
+                &["-c", "echo a; sleep 0.03; echo b 1>&2; exit 3"],
             )],
             false,
             tx,
@@ -720,6 +808,15 @@ mod tests {
                 success: false
             })
         ));
+        let stdout = events
+            .iter()
+            .position(|event| matches!(event, TaskEvent::Line { line, .. } if line == "a"))
+            .expect("stdout line");
+        let stderr = events
+            .iter()
+            .position(|event| matches!(event, TaskEvent::Line { line, .. } if line == "b"))
+            .expect("stderr line");
+        assert!(stdout < stderr);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -757,14 +854,60 @@ mod tests {
         assert_eq!(tail.to_top_offset(20, 5), 12);
     }
 
+    #[test]
+    fn appended_lines_hold_the_unpinned_view_in_place() {
+        let mut tasks = vec![RunningTask {
+            label: "test".into(),
+            lines: (0..20).map(|line| line.to_string()).collect(),
+            state: TaskState::Running,
+            tail: TailScroll::new(3),
+        }];
+        let before = tasks[0].tail.to_top_offset(tasks[0].lines.len(), 5);
+
+        apply_event(
+            &mut tasks,
+            TaskEvent::Line {
+                task: 0,
+                line: "new".into(),
+            },
+        );
+
+        assert_eq!(tasks[0].tail.to_top_offset(tasks[0].lines.len(), 5), before);
+    }
+
+    #[test]
+    fn cancellation_does_not_report_done_before_executor_reaps() {
+        let process_groups = Arc::new(Mutex::new(vec![None]));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let handles = vec![TaskHandle {
+            task: 0,
+            process_groups,
+            cancelled,
+        }];
+        let mut tasks = vec![RunningTask {
+            label: "test".into(),
+            lines: vec![],
+            state: TaskState::Running,
+            tail: TailScroll::default(),
+        }];
+
+        cancel_tasks(&mut tasks, &handles);
+
+        assert_eq!(tasks[0].state, TaskState::Cancelling);
+        assert!(!all_done(&tasks));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn cancellation_kills_child_process_group() {
+    async fn cancellation_reaps_a_detached_grandchild_before_done() {
         let (tx, rx) = mpsc::channel();
         let handles = spawn_tasks(
             vec![TaskDef::new(
                 "long task",
                 "sh",
-                &["-c", "trap 'exit 0' TERM; sleep 100 & wait"],
+                &[
+                    "-c",
+                    "trap 'exit 0' TERM; (trap ':' TERM; echo ready >&3; exec 3>&-; while :; do sleep 1; done) 3>&1 </dev/null >/dev/null 2>&1 & wait",
+                ],
             )],
             false,
             tx,
@@ -773,11 +916,75 @@ mod tests {
             rx.recv_timeout(Duration::from_secs(2)),
             Ok(TaskEvent::Started { task: 0 })
         ));
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(TaskEvent::Line { line, .. }) if line == "ready" => break,
+                Ok(_) => {}
+                Err(error) => panic!("readiness event: {error}"),
+            }
+        }
+        let pgid = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(pgid) = handles[0]
+                    .process_groups
+                    .lock()
+                    .expect("process group lock")[0]
+                {
+                    break i32::try_from(pgid).expect("pgid fits i32");
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("process group registered");
 
         assert!(handles[0].cancel());
         let events = collect_events(&rx, 1);
 
+        assert!(matches!(
+            events.last(),
+            Some(TaskEvent::Done { success: false, .. })
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if !process_group_exists(pgid) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("process group reaped");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_escalates_when_the_group_leader_resists_term() {
+        let (tx, rx) = mpsc::channel();
+        let handles = spawn_tasks(
+            vec![TaskDef::new(
+                "resistant task",
+                "sh",
+                &[
+                    "-c",
+                    "trap ':' TERM; echo ready; while :; do sleep 100 & wait; done",
+                ],
+            )],
+            false,
+            tx,
+        );
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(TaskEvent::Line { line, .. }) if line == "ready" => break,
+                Ok(_) => {}
+                Err(error) => panic!("readiness event: {error}"),
+            }
+        }
+
+        let cancel_started = std::time::Instant::now();
+        assert!(handles[0].cancel());
+        let events = collect_events(&rx, 1);
+
+        assert!(cancel_started.elapsed() >= Duration::from_millis(650));
         assert!(matches!(
             events.last(),
             Some(TaskEvent::Done { success: false, .. })
