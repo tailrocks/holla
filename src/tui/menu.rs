@@ -314,270 +314,251 @@ pub async fn run() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(session.writer_mut());
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let selected_action =
-        loop {
-            if let Some(scans) = scans.as_mut() {
-                loop {
-                    match scans.poll_next() {
-                        SubscriptionPoll::Ready(ScanEvent::Group {
-                            provider_index,
-                            provider_id,
-                            group,
-                        }) => menu.insert_scanned_group(provider_index, provider_id, group),
-                        SubscriptionPoll::Ready(ScanEvent::Finished) | SubscriptionPoll::Closed => {
-                            scanning = false;
-                            break;
-                        }
-                        SubscriptionPoll::Pending => break,
+    let selected_action = loop {
+        if let Some(scans) = scans.as_mut() {
+            loop {
+                match scans.poll_next() {
+                    SubscriptionPoll::Ready(ScanEvent::Group {
+                        provider_index,
+                        provider_id,
+                        group,
+                    }) => menu.insert_scanned_group(provider_index, provider_id, group),
+                    SubscriptionPoll::Ready(ScanEvent::Finished) | SubscriptionPoll::Closed => {
+                        scanning = false;
+                        break;
                     }
+                    SubscriptionPoll::Pending => break,
                 }
             }
+        }
 
-            let rows = menu_rows(&menu, search_state.value(), &theme);
-            if !rows.iter().any(|row| {
-                row.enabled && list_state.selected.as_ref().is_some_and(|id| id == &row.id)
-            }) {
-                list_state.select(
-                    rows.iter()
-                        .find(|row| row.enabled)
-                        .map(|row| row.id.clone()),
-                );
-            }
-            list_state.focused = !preview_focused;
-            let preview = preview_lines(&menu, list_state.selected.as_deref(), &theme);
-            let preview_width = max_line_width(&preview);
-            let mut preview_viewport = (0usize, 0usize);
+        let rows = menu_rows(&menu, search_state.value(), &theme);
+        if !rows
+            .iter()
+            .any(|row| row.enabled && list_state.selected.as_ref().is_some_and(|id| id == &row.id))
+        {
+            list_state.select(
+                rows.iter()
+                    .find(|row| row.enabled)
+                    .map(|row| row.id.clone()),
+            );
+        }
+        list_state.focused = !preview_focused;
+        let preview = preview_lines(&menu, list_state.selected.as_deref(), &theme);
+        let preview_width = max_line_width(&preview);
+        let mut preview_viewport = (0usize, 0usize);
 
-            terminal.draw(|frame| {
-                let [header_area, search_area, body_area, footer_area] = Layout::vertical([
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                    Constraint::Min(0),
-                    Constraint::Length(1),
-                ])
-                .areas(frame.area());
-                let [list_area, preview_area] =
-                    Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
-                        .areas(body_area);
-                let context = if scanning {
-                    if cwd.is_empty() {
-                        "scanning…".to_owned()
-                    } else {
-                        format!("scanning… · {cwd}")
-                    }
+        terminal.draw(|frame| {
+            let [header_area, search_area, body_area, footer_area] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
+            .areas(frame.area());
+            let [list_area, preview_area] =
+                Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .areas(body_area);
+            let context = if scanning {
+                if cwd.is_empty() {
+                    "scanning…".to_owned()
                 } else {
-                    cwd.clone()
-                };
-                let left_slots = [StatusSlot {
-                    id: HeaderSlot::Product,
-                    content: " holla ",
-                    priority: 2,
-                    min_width: 0,
-                    enabled: true,
-                    style: theme.style(Role::Accent),
-                    hover_style: None,
-                }];
-                let right_slots = [StatusSlot {
-                    id: HeaderSlot::Context,
-                    content: &context,
-                    priority: 1,
-                    min_width: 8,
-                    enabled: !context.is_empty(),
-                    style: theme.style(Role::TextMuted),
-                    hover_style: None,
-                }];
-                frame.render_stateful_widget(
-                    &StatusBar {
-                        left: &left_slots,
-                        right: &right_slots,
-                        theme: &theme,
-                        alpha: 1.0,
-                    },
-                    header_area,
-                    &mut status_state,
-                );
-                frame.render_stateful_widget(
-                    &TextInput {
-                        label: "Search",
-                        placeholder: "Search actions…",
-                        validation: Validation::Valid,
-                        theme: &theme,
-                    },
-                    search_area,
-                    &mut search_state,
-                );
-
-                let list_panel = Panel::new(&theme)
-                    .title(" holla ")
-                    .emphasis(if preview_focused {
-                        PanelEmphasis::Normal
-                    } else {
-                        PanelEmphasis::Focused
-                    });
-                let list_inner = list_panel.inner(list_area);
-                frame.render_widget(&list_panel, list_area);
-                frame.render_stateful_widget(
-                    &List {
-                        rows: &rows,
-                        theme: &theme,
-                    },
-                    list_inner,
-                    &mut list_state,
-                );
-
-                preview_viewport = (
-                    usize::from(preview_area.height.saturating_sub(2)),
-                    usize::from(preview_area.width.saturating_sub(2)),
-                );
-                frame.render_stateful_widget(
-                    &Viewport {
-                        lines: &preview,
-                        title: Some("Preview"),
-                        theme: &theme,
-                        content_style: Some(theme.style(Role::Text)),
-                    },
-                    preview_area,
-                    &mut preview_scroll,
-                );
-                render_hint_bar(frame, footer_area, &MENU_KEYMAP.hint_spans(), &theme);
-
-                if let Some(pending) = pending_confirm.as_mut()
-                    && let Some(action) = menu.action(&pending.action_id)
-                {
-                    let mut body = vec![
-                        Line::styled(action.description.clone(), theme.style(Role::Text)),
-                        Line::raw(""),
-                    ];
-                    body.extend(
-                        action.preview.lines().map(|line| {
-                            Line::styled(line.to_owned(), theme.style(Role::TextMuted))
-                        }),
-                    );
-                    body.push(Line::raw(""));
-                    let warning = Line::styled(
-                        "Warning: this deletes local data.",
-                        theme.style(Role::Warning),
-                    );
-                    body.push(warning.clone());
-                    frame.render_widget(&Backdrop::default(), frame.area());
-                    let area = centered_rect(68, 18, frame.area());
-                    let max_body_lines = usize::from(area.height.saturating_sub(4));
-                    if body.len() > max_body_lines {
-                        body.truncate(max_body_lines.saturating_sub(1));
-                        if max_body_lines > 0 {
-                            body.push(warning);
-                        }
-                    }
-                    frame.render_stateful_widget(
-                        &ChoiceDialog {
-                            dialog: Dialog {
-                                title: "Confirm destructive action",
-                                body: Text::from(body),
-                                style: theme.style(Role::Text),
-                                theme: &theme,
-                                emphasis: PanelEmphasis::Focused,
-                            },
-                            actions: &confirm_actions,
-                            gap: "  ",
-                        },
-                        area,
-                        &mut pending.state,
-                    );
+                    format!("scanning… · {cwd}")
                 }
-            })?;
+            } else {
+                cwd.clone()
+            };
+            let left_slots = [StatusSlot {
+                id: HeaderSlot::Product,
+                content: " holla ",
+                priority: 2,
+                min_width: 0,
+                enabled: true,
+                style: theme.style(Role::Accent),
+                hover_style: None,
+            }];
+            let right_slots = [StatusSlot {
+                id: HeaderSlot::Context,
+                content: &context,
+                priority: 1,
+                min_width: 8,
+                enabled: !context.is_empty(),
+                style: theme.style(Role::TextMuted),
+                hover_style: None,
+            }];
+            frame.render_stateful_widget(
+                &StatusBar::new(&left_slots, &right_slots, &theme).alpha(1.0),
+                header_area,
+                &mut status_state,
+            );
+            frame.render_stateful_widget(
+                &TextInput::new("Search", &theme)
+                    .placeholder("Search actions…")
+                    .validation(Validation::Valid),
+                search_area,
+                &mut search_state,
+            );
 
-            if scans.is_none() {
-                // First frame is now visible. Only then may blocking provider work start.
-                scans = Some(StdSubscription(providers::spawn_scans()));
+            let list_panel = Panel::new(&theme)
+                .title(" holla ")
+                .emphasis(if preview_focused {
+                    PanelEmphasis::Normal
+                } else {
+                    PanelEmphasis::Focused
+                });
+            let list_inner = list_panel.inner(list_area);
+            frame.render_widget(&list_panel, list_area);
+            frame.render_stateful_widget(&List::new(&rows, &theme), list_inner, &mut list_state);
+
+            preview_viewport = (
+                usize::from(preview_area.height.saturating_sub(2)),
+                usize::from(preview_area.width.saturating_sub(2)),
+            );
+            frame.render_stateful_widget(
+                &Viewport::new(&preview, &theme)
+                    .title("Preview")
+                    .content_style(theme.style(Role::Text)),
+                preview_area,
+                &mut preview_scroll,
+            );
+            render_hint_bar(frame, footer_area, &MENU_KEYMAP.hint_spans(), &theme);
+
+            if let Some(pending) = pending_confirm.as_mut()
+                && let Some(action) = menu.action(&pending.action_id)
+            {
+                let mut body = vec![
+                    Line::styled(action.description.clone(), theme.style(Role::Text)),
+                    Line::raw(""),
+                ];
+                body.extend(
+                    action
+                        .preview
+                        .lines()
+                        .map(|line| Line::styled(line.to_owned(), theme.style(Role::TextMuted))),
+                );
+                body.push(Line::raw(""));
+                let warning = Line::styled(
+                    "Warning: this deletes local data.",
+                    theme.style(Role::Warning),
+                );
+                body.push(warning.clone());
+                frame.render_widget(Backdrop::default(), frame.area());
+                let area = centered_rect(68, 18, frame.area());
+                let max_body_lines = usize::from(area.height.saturating_sub(4));
+                if body.len() > max_body_lines {
+                    body.truncate(max_body_lines.saturating_sub(1));
+                    if max_body_lines > 0 {
+                        body.push(warning);
+                    }
+                }
+                frame.render_stateful_widget(
+                    &ChoiceDialog::new(
+                        Dialog::new("Confirm destructive action", Text::from(body), &theme)
+                            .style(theme.style(Role::Text))
+                            .emphasis(PanelEmphasis::Focused),
+                        &confirm_actions,
+                    )
+                    .gap("  "),
+                    area,
+                    &mut pending.state,
+                );
+            }
+        })?;
+
+        if scans.is_none() {
+            // First frame is now visible. Only then may blocking provider work start.
+            scans = Some(StdSubscription(providers::spawn_scans()));
+            continue;
+        }
+
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            let key = termrock::input::KeyEvent::from(key);
+            if let Some(pending) = pending_confirm.as_mut() {
+                match pending.state.handle_key(&confirm_actions, key) {
+                    Outcome::Activated(ConfirmChoice::Run) => {
+                        break Some(pending.action_id.clone());
+                    }
+                    Outcome::Activated(ConfirmChoice::Cancel) | Outcome::Cancelled => {
+                        pending_confirm = None;
+                    }
+                    Outcome::Ignored | Outcome::Changed => {}
+                    _ => {}
+                }
                 continue;
             }
 
-            if event::poll(Duration::from_millis(50))?
-                && let Event::Key(key) = event::read()?
-            {
-                if key.kind != KeyEventKind::Press {
-                    continue;
+            if key.code == termrock::input::KeyCode::Esc {
+                if search_state.value().is_empty() {
+                    break None;
                 }
-                let key = termrock::input::KeyEvent::from(key);
-                if let Some(pending) = pending_confirm.as_mut() {
-                    match pending.state.handle_key(&confirm_actions, key) {
-                        Outcome::Activated(ConfirmChoice::Run) => {
-                            break Some(pending.action_id.clone());
-                        }
-                        Outcome::Activated(ConfirmChoice::Cancel) | Outcome::Cancelled => {
-                            pending_confirm = None;
-                        }
-                        Outcome::Ignored | Outcome::Changed => {}
-                    }
-                    continue;
-                }
+                search_state = TextInputState::new("").with_allow_empty(true);
+                list_state.select(None);
+                continue;
+            }
 
-                if key.code == termrock::input::KeyCode::Esc {
-                    if search_state.value().is_empty() {
-                        break None;
-                    }
-                    search_state = TextInputState::new("").with_allow_empty(true);
+            if matches!(
+                key.code,
+                termrock::input::KeyCode::Char(_)
+                    | termrock::input::KeyCode::Backspace
+                    | termrock::input::KeyCode::Delete
+            ) {
+                if search_state.handle_key(key) == TextInputOutcome::Changed {
                     list_state.select(None);
-                    continue;
+                    preview_scroll = DialogScroll::new();
                 }
+                continue;
+            }
 
+            if preview_focused {
                 if matches!(
                     key.code,
-                    termrock::input::KeyCode::Char(_)
-                        | termrock::input::KeyCode::Backspace
-                        | termrock::input::KeyCode::Delete
+                    termrock::input::KeyCode::Tab | termrock::input::KeyCode::Left
                 ) {
-                    if search_state.handle_key(key) == TextInputOutcome::Changed {
-                        list_state.select(None);
-                        preview_scroll = DialogScroll::new();
-                    }
-                    continue;
+                    preview_focused = false;
+                } else {
+                    preview_scroll.handle_key(
+                        key,
+                        preview.len(),
+                        preview_viewport.0,
+                        preview_width,
+                        preview_viewport.1,
+                    );
                 }
+                continue;
+            }
 
-                if preview_focused {
+            match list_state.handle_key(&rows, key) {
+                Outcome::Activated(id) => {
+                    if let Some(action) = menu.action(&id) {
+                        if needs_confirmation(action) {
+                            pending_confirm = Some(PendingConfirm {
+                                action_id: id,
+                                state: ChoiceDialogState::new(Some(ConfirmChoice::Cancel)),
+                            });
+                        } else {
+                            break Some(id);
+                        }
+                    }
+                }
+                Outcome::Changed => preview_scroll = DialogScroll::new(),
+                Outcome::Cancelled => break None,
+                Outcome::Ignored => {
                     if matches!(
                         key.code,
-                        termrock::input::KeyCode::Tab | termrock::input::KeyCode::Left
+                        termrock::input::KeyCode::Tab | termrock::input::KeyCode::Right
                     ) {
-                        preview_focused = false;
-                    } else {
-                        preview_scroll.handle_key(
-                            key,
-                            preview.len(),
-                            preview_viewport.0,
-                            preview_width,
-                            preview_viewport.1,
-                        );
-                    }
-                    continue;
-                }
-
-                match list_state.handle_key(&rows, key) {
-                    Outcome::Activated(id) => {
-                        if let Some(action) = menu.action(&id) {
-                            if needs_confirmation(action) {
-                                pending_confirm = Some(PendingConfirm {
-                                    action_id: id,
-                                    state: ChoiceDialogState::new(Some(ConfirmChoice::Cancel)),
-                                });
-                            } else {
-                                break Some(id);
-                            }
-                        }
-                    }
-                    Outcome::Changed => preview_scroll = DialogScroll::new(),
-                    Outcome::Cancelled => break None,
-                    Outcome::Ignored => {
-                        if matches!(
-                            key.code,
-                            termrock::input::KeyCode::Tab | termrock::input::KeyCode::Right
-                        ) {
-                            preview_focused = true;
-                        }
+                        preview_focused = true;
                     }
                 }
+                _ => {}
             }
-        };
+        }
+    };
 
     drop(terminal);
     session.restore()?;

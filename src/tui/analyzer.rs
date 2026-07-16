@@ -144,6 +144,7 @@ fn handle_confirm_input(
         Outcome::Activated(DeleteChoice::Cancel) | Outcome::Cancelled => ConfirmTransition::Cancel,
         Outcome::Activated(DeleteChoice::Delete) => ConfirmTransition::Delete(*mode),
         Outcome::Ignored | Outcome::Changed => ConfirmTransition::None,
+        _ => ConfirmTransition::None,
     }
 }
 
@@ -346,23 +347,14 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 hover_style: None,
             }];
             frame.render_stateful_widget(
-                &StatusBar {
-                    left: &left,
-                    right: &right,
-                    theme: &theme,
-                    alpha: 1.0,
-                },
+                &StatusBar::new(&left, &right, &theme).alpha(1.0),
                 header_area,
                 &mut status_state,
             );
             if scanning {
                 let label = format!("{} scanned", format_size(scan_bytes, DECIMAL));
                 frame.render_widget(
-                    &Progress {
-                        kind: ProgressKind::Indeterminate { tick },
-                        label: Some(&label),
-                        theme: &theme,
-                    },
+                    Progress::new(ProgressKind::Indeterminate { tick }, &theme).label(&label),
                     progress_area,
                 );
             } else {
@@ -376,14 +368,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 .emphasis(PanelEmphasis::Focused);
             let inner = panel.inner(tree_area);
             frame.render_widget(&panel, tree_area);
-            frame.render_stateful_widget(
-                &Tree {
-                    nodes: &rows,
-                    theme: &theme,
-                },
-                inner,
-                &mut tree_state,
-            );
+            frame.render_stateful_widget(&Tree::new(&rows, &theme), inner, &mut tree_state);
             frame.render_widget(
                 Paragraph::new(selection_copy.as_str()).style(theme.style(Role::Text)),
                 selection_area,
@@ -395,11 +380,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 honesty_area,
             );
             frame.render_widget(
-                &HintBar {
-                    hints: ANALYZER_HINTS,
-                    separator: " · ",
-                    theme: &theme,
-                },
+                HintBar::new(ANALYZER_HINTS, &theme).separator(" · "),
                 hints_area,
             );
             render_modal(frame, &mut modals, &theme, tick, exit_after_delete);
@@ -454,6 +435,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                             }
                             Outcome::Activated(QuitChoice::Leave) => ModalEffect::ExitAfterDelete,
                             Outcome::Ignored | Outcome::Changed => ModalEffect::None,
+                            _ => ModalEffect::None,
                         }
                     }
                     AnalyzerModal::Report { .. } => {
@@ -524,6 +506,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                     TreeOutcome::Ignored
                     | TreeOutcome::SelectionChanged(_)
                     | TreeOutcome::CheckToggled(_) => {}
+                    _ => {}
                 },
             }
         }
@@ -551,7 +534,7 @@ pub async fn prompt_path() -> anyhow::Result<Option<PathBuf>> {
 
     let selected = loop {
         terminal.draw(|frame| {
-            frame.render_widget(&Backdrop::default(), frame.area());
+            frame.render_widget(Backdrop::default(), frame.area());
             let area = centered_rect(76, 7, frame.area());
             let panel = Panel::new(&theme)
                 .title(" Analyze a path ")
@@ -567,14 +550,13 @@ pub async fn prompt_path() -> anyhow::Result<Option<PathBuf>> {
             .areas(inner);
             frame.render_widget(Paragraph::new("Enter an absolute existing path"), copy_area);
             frame.render_stateful_widget(
-                &TextInput {
-                    label: "Path",
-                    placeholder: "/Users/name",
-                    validation: error_message
-                        .as_deref()
-                        .map_or(Validation::Valid, Validation::Invalid),
-                    theme: &theme,
-                },
+                &TextInput::new("Path", &theme)
+                    .placeholder("/Users/name")
+                    .validation(
+                        error_message
+                            .as_deref()
+                            .map_or(Validation::Valid, Validation::Invalid),
+                    ),
                 input_area,
                 &mut input,
             );
@@ -585,8 +567,8 @@ pub async fn prompt_path() -> anyhow::Result<Option<PathBuf>> {
                 );
             }
             frame.render_widget(
-                &HintBar {
-                    hints: &[
+                HintBar::new(
+                    &[
                         Hint {
                             chord: "enter",
                             label: "analyze",
@@ -600,9 +582,9 @@ pub async fn prompt_path() -> anyhow::Result<Option<PathBuf>> {
                             visible: true,
                         },
                     ],
-                    separator: " · ",
-                    theme: &theme,
-                },
+                    &theme,
+                )
+                .separator(" · "),
                 hints_area,
             );
         })?;
@@ -627,6 +609,7 @@ pub async fn prompt_path() -> anyhow::Result<Option<PathBuf>> {
                 TextInputOutcome::Cancelled => break None,
                 TextInputOutcome::Changed => error_message = None,
                 TextInputOutcome::Ignored => {}
+                _ => {}
             }
         }
     };
@@ -670,7 +653,7 @@ fn render_modal(
     let Some(modal) = modals.current_mut() else {
         return;
     };
-    frame.render_widget(&Backdrop::default(), frame.area());
+    frame.render_widget(Backdrop::default(), frame.area());
     match modal {
         AnalyzerModal::Confirm {
             items,
@@ -748,17 +731,13 @@ fn render_modal(
             ];
             let area = centered_rect(76, 18, frame.area());
             frame.render_stateful_widget(
-                &ChoiceDialog {
-                    dialog: Dialog {
-                        title: "Confirm cleanup",
-                        body: Text::from(body),
-                        style: theme.style(Role::Text),
-                        theme,
-                        emphasis: PanelEmphasis::Focused,
-                    },
-                    actions: &actions,
-                    gap: "  ",
-                },
+                &ChoiceDialog::new(
+                    Dialog::new("Confirm cleanup", Text::from(body), theme)
+                        .style(theme.style(Role::Text))
+                        .emphasis(PanelEmphasis::Focused),
+                    &actions,
+                )
+                .gap("  "),
                 area,
                 state,
             );
@@ -766,25 +745,21 @@ fn render_modal(
         AnalyzerModal::Deleting { .. } => {
             let area = centered_rect(58, 7, frame.area());
             frame.render_widget(
-                &Dialog {
-                    title: "Cleanup in progress",
-                    body: Text::from(if exit_after_delete {
+                Dialog::new(
+                    "Cleanup in progress",
+                    Text::from(if exit_after_delete {
                         "Finishing safely; holla will exit afterward."
                     } else {
                         "Moving selected items. This operation cannot be interrupted."
                     }),
-                    style: theme.style(Role::Text),
                     theme,
-                    emphasis: PanelEmphasis::Focused,
-                },
+                )
+                .style(theme.style(Role::Text))
+                .emphasis(PanelEmphasis::Focused),
                 area,
             );
             frame.render_widget(
-                &Progress {
-                    kind: ProgressKind::Indeterminate { tick },
-                    label: Some("Cleaning up"),
-                    theme,
-                },
+                Progress::new(ProgressKind::Indeterminate { tick }, theme).label("Cleaning up"),
                 ratatui::layout::Rect::new(
                     area.x.saturating_add(2),
                     area.bottom().saturating_sub(2),
@@ -810,19 +785,19 @@ fn render_modal(
             ];
             let area = centered_rect(64, 8, frame.area());
             frame.render_stateful_widget(
-                &ChoiceDialog {
-                    dialog: Dialog {
-                        title: "Cleanup still running",
-                        body: Text::from(
+                &ChoiceDialog::new(
+                    Dialog::new(
+                        "Cleanup still running",
+                        Text::from(
                             "Deletion cannot be interrupted. Leave automatically after it finishes?",
                         ),
-                        style: theme.style(Role::Text),
                         theme,
-                        emphasis: PanelEmphasis::Focused,
-                    },
-                    actions: &actions,
-                    gap: "  ",
-                },
+                    )
+                    .style(theme.style(Role::Text))
+                    .emphasis(PanelEmphasis::Focused),
+                    &actions,
+                )
+                .gap("  "),
                 area,
                 state,
             );
@@ -905,23 +880,23 @@ fn render_modal(
             ];
             let area = centered_rect(60, 12, frame.area());
             frame.render_stateful_widget(
-                &MessageDialog {
-                    dialog: Dialog {
-                        title: "Cleanup report",
-                        body: Text::from(if *mode == DeleteMode::Trash {
+                &MessageDialog::new(
+                    Dialog::new(
+                        "Cleanup report",
+                        Text::from(if *mode == DeleteMode::Trash {
                             "Moved to Trash. Empty Trash to reclaim space. Press Esc or Enter."
                         } else {
                             "Cleanup finished. Press Esc or Enter to return."
                         }),
-                        style: theme.style(Role::Text),
                         theme,
-                        emphasis: PanelEmphasis::Focused,
-                    },
-                    details: &details,
-                    label_width: 12,
-                    wrap: false,
+                    )
+                    .style(theme.style(Role::Text))
+                    .emphasis(PanelEmphasis::Focused),
+                    &details,
                     theme,
-                },
+                )
+                .label_width(12)
+                .wrap(false),
                 area,
                 state,
             );

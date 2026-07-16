@@ -586,12 +586,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 hover_style: None,
             }];
             frame.render_stateful_widget(
-                &StatusBar {
-                    left: &left_slots,
-                    right: &right_slots,
-                    theme: &theme,
-                    alpha: 1.0,
-                },
+                &StatusBar::new(&left_slots, &right_slots, &theme).alpha(1.0),
                 status_area,
                 &mut status_state,
             );
@@ -614,11 +609,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 })
                 .collect();
             frame.render_stateful_widget(
-                &Tabs {
-                    tabs: &tabs,
-                    gap: 1,
-                    theme: &theme,
-                },
+                &Tabs::new(&tabs, &theme).gap(1),
                 tabs_area,
                 &mut tabs_state,
             );
@@ -641,12 +632,9 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 scroll_y: u16::try_from(top).unwrap_or(u16::MAX),
             };
             frame.render_stateful_widget(
-                &Viewport {
-                    lines: &output_lines,
-                    title: Some(tasks[selected].label.as_str()),
-                    theme: &theme,
-                    content_style: Some(theme.style(Role::Text)),
-                },
+                &Viewport::new(&output_lines, &theme)
+                    .title(tasks[selected].label.as_str())
+                    .content_style(theme.style(Role::Text)),
                 output_area,
                 &mut viewport_state,
             );
@@ -659,20 +647,20 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
             render_hint_bar(frame, footer_area, &hints, &theme);
 
             if let Some(dialog_state) = cancel_dialog.as_mut() {
-                frame.render_widget(&Backdrop::default(), frame.area());
+                frame.render_widget(Backdrop::default(), frame.area());
                 let area = centered_rect(54, 7, frame.area());
                 frame.render_stateful_widget(
-                    &ChoiceDialog {
-                        dialog: Dialog {
-                            title: "Stop running tasks?",
-                            body: Text::from("Tasks are still running — stop them?"),
-                            style: theme.style(Role::Text),
-                            theme: &theme,
-                            emphasis: PanelEmphasis::Focused,
-                        },
-                        actions: &cancel_actions,
-                        gap: "  ",
-                    },
+                    &ChoiceDialog::new(
+                        Dialog::new(
+                            "Stop running tasks?",
+                            Text::from("Tasks are still running — stop them?"),
+                            &theme,
+                        )
+                        .style(theme.style(Role::Text))
+                        .emphasis(PanelEmphasis::Focused),
+                        &cancel_actions,
+                    )
+                    .gap("  "),
                     area,
                     dialog_state,
                 );
@@ -696,6 +684,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                         cancel_dialog = None;
                     }
                     Outcome::Ignored | Outcome::Changed => {}
+                    _ => {}
                 }
                 continue;
             }
