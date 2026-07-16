@@ -45,7 +45,7 @@ confirmed bugs that would otherwise be carried into the new architecture:
 
 Repo facts:
 
-- Rust edition 2024, toolchain 1.96.0 (`rust-toolchain.toml`), tokio full,
+- Rust edition 2024, toolchain 1.97.1 (`rust-toolchain.toml`), tokio full,
   clap 4.5, anyhow. Binary `holla`, sources in `src/`.
 - CI (`.github/workflows/ci.yml`): `cargo nextest run --all-features
   --color=always --no-tests=pass`, `cargo build`, `cargo fmt --all --check`,

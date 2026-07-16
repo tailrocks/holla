@@ -34,7 +34,7 @@ Linux), so the UI layer is already portable.
 
 ## Current state
 
-- CI runs on `ubuntu-latest` (build+test already green on Linux).
+- CI runs on fixed `ubuntu-26.04` (build+test already green on Linux).
 - `rust-toolchain.toml` carries Linux targets
   (`aarch64/x86_64-unknown-linux-gnu`); release-deb workflow builds via
   zigbuild for glibc 2.17.
@@ -75,7 +75,7 @@ Linux), so the UI layer is already portable.
 |---------|---------|---------------------|
 | Gates (mac) | `cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo nextest run --all-features && cargo build` | all exit 0 |
 | Linux check | `cargo zigbuild --target x86_64-unknown-linux-gnu` (mise has cargo-zigbuild) or CI | exit 0 |
-| Linux tests | CI (`ubuntu-latest` job) | green |
+| Linux tests | CI (`ubuntu-26.04` job) | green |
 
 ## Scope
 

@@ -3,6 +3,7 @@ name = "holla-cli"
 version = "0.1.0-dev"
 build = "build.rs"
 edition = "2024"
+rust-version = "1.97.1"
 description = "Adaptive dev environment CLI — adapts to what you have installed"
 license = "Apache-2.0"
 repository = "https://github.com/tailrocks/holla"
@@ -15,11 +16,11 @@ name = "holla"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.5", features = ["derive", "color", "help", "usage"] }
-tokio = { version = "1.45", features = ["full"] }
+clap = { version = "4.6", features = ["derive", "color", "help", "usage"] }
+tokio = { version = "1.52", features = ["full"] }
 ratatui = "0.30.2"
 crossterm = { version = "0.29", features = ["event-stream"] }
-termrock = { git = "https://github.com/tailrocks/termrock.git", rev = "0089bd7bcd99086be1e7c7bf4753a733ef0bd935", features = ["crossterm"] }
+termrock = { git = "https://github.com/tailrocks/termrock.git", rev = "7f24de44af06a13ac6ce3c8624a363741c43daaa", features = ["crossterm"] }
 anyhow = "1.0"
 thiserror = "2.0"
 which = "8.0"
@@ -27,12 +28,13 @@ tokio-stream = "0.1"
 futures = "0.3"
 libc = "0.2"
 nucleo-matcher = "0.3"
-unicode-segmentation = "1.12"
+unicode-segmentation = "1.13"
 jwalk = "0.8"
 rayon = "1"
 dashmap = "6"
 dirs = "6"
 humansize = "2.1"
+humantime = "2.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 trash = "5.2.6"
