@@ -1,5 +1,5 @@
 use crate::{
-    cleanup::{DeleteMode, DeletePlan, DeleteReport, execute},
+    cleanup::{DeleteMode, DeletePlan, DeleteReport, execute, operation_log_path},
     du::{NodeId, NodeState, ScanEvent, ScanHandle, ScanOptions, ScanTree, SortKey, scan},
 };
 use crossterm::event::{self, Event, KeyEventKind};
@@ -105,6 +105,47 @@ enum ModalEffect {
     OpenQuit,
     Start(DeletePlan),
     ExitAfterDelete,
+}
+
+const REPORT_ISSUE_LIMIT: usize = 6;
+
+fn report_body_lines(report: &DeleteReport, mode: DeleteMode) -> Vec<String> {
+    let mut lines = vec![if mode == DeleteMode::Trash {
+        "Moved to Trash. Empty Trash to reclaim space. Press Esc or Enter.".to_owned()
+    } else {
+        "Cleanup finished. Press Esc or Enter to return.".to_owned()
+    }];
+    let total_issues = report.failed.len() + report.skipped.len();
+    if total_issues > 0 {
+        lines.push(String::new());
+        lines.extend(
+            report
+                .failed
+                .iter()
+                .map(|(path, reason)| format!("Failed: {} — {reason}", path.display()))
+                .chain(
+                    report
+                        .skipped
+                        .iter()
+                        .map(|(path, reason)| format!("Skipped: {} — {reason}", path.display())),
+                )
+                .take(REPORT_ISSUE_LIMIT),
+        );
+        if total_issues > REPORT_ISSUE_LIMIT {
+            lines.push(format!(
+                "…and {} more; see the operation log.",
+                total_issues - REPORT_ISSUE_LIMIT
+            ));
+        }
+    }
+    lines.push(format!(
+        "Full log: {}",
+        operation_log_path().map_or_else(
+            || "unavailable".to_owned(),
+            |path| path.display().to_string()
+        )
+    ));
+    lines
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -807,6 +848,7 @@ fn render_modal(
             mode,
             state,
         } => {
+            let body_lines = report_body_lines(report, *mode);
             let removed = report.removed.len().to_string();
             let failed = report.failed.len().to_string();
             let skipped = report.skipped.len().to_string();
@@ -878,16 +920,21 @@ fn render_modal(
                     style: None,
                 },
             ];
-            let area = centered_rect(60, 12, frame.area());
+            let area = centered_rect(
+                80,
+                u16::try_from(12_usize.saturating_add(body_lines.len().min(9))).unwrap_or(21),
+                frame.area(),
+            );
             frame.render_stateful_widget(
                 &MessageDialog::new(
                     Dialog::new(
                         "Cleanup report",
-                        Text::from(if *mode == DeleteMode::Trash {
-                            "Moved to Trash. Empty Trash to reclaim space. Press Esc or Enter."
-                        } else {
-                            "Cleanup finished. Press Esc or Enter to return."
-                        }),
+                        Text::from(
+                            body_lines
+                                .iter()
+                                .map(|line| Line::raw(line.as_str()))
+                                .collect::<Vec<_>>(),
+                        ),
                         theme,
                     )
                     .style(theme.style(Role::Text))
@@ -1148,6 +1195,47 @@ mod tests {
         assert!(requests_quit_while_deleting(key(KeyCode::Char('q'))));
         assert!(requests_quit_while_deleting(key(KeyCode::Esc)));
         assert!(!requests_quit_while_deleting(key(KeyCode::Enter)));
+    }
+
+    #[test]
+    fn cleanup_report_names_failed_and_skipped_items_with_reasons() {
+        let report = DeleteReport {
+            failed: vec![(PathBuf::from("/tmp/broken"), "permission denied".into())],
+            skipped: vec![(PathBuf::from("/tmp/duplicate"), "duplicate path".into())],
+            ..DeleteReport::default()
+        };
+        let lines = report_body_lines(&report, DeleteMode::Trash).join("\n");
+        assert!(lines.contains("Failed: /tmp/broken — permission denied"));
+        assert!(lines.contains("Skipped: /tmp/duplicate — duplicate path"));
+        assert!(lines.contains("Full log:"));
+    }
+
+    #[test]
+    fn cleanup_report_bounds_issue_details_and_points_to_log() {
+        let report = DeleteReport {
+            failed: (0..9)
+                .map(|index| (PathBuf::from(format!("/tmp/{index}")), "failed".into()))
+                .collect(),
+            ..DeleteReport::default()
+        };
+        let lines = report_body_lines(&report, DeleteMode::Permanent);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("Failed:"))
+                .count(),
+            REPORT_ISSUE_LIMIT
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "…and 3 more; see the operation log.")
+        );
+        assert!(
+            lines
+                .last()
+                .is_some_and(|line| line.starts_with("Full log:"))
+        );
     }
 
     #[test]

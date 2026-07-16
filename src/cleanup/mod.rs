@@ -85,8 +85,12 @@ pub fn validate(path: &Path) -> Result<(), Rejection> {
 }
 
 pub fn execute(plan: &DeletePlan) -> DeleteReport {
-    let log_path = ops_log_path();
+    let log_path = operation_log_path();
     execute_with_log_path(plan, log_path.as_deref())
+}
+
+pub fn operation_log_path() -> Option<PathBuf> {
+    configured_ops_log_path()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -379,7 +383,7 @@ fn append_log(path: &Path, line: &OpsLogLine<'_>) -> Result<(), String> {
 }
 
 #[cfg(not(test))]
-fn ops_log_path() -> Option<PathBuf> {
+fn configured_ops_log_path() -> Option<PathBuf> {
     std::env::var_os("XDG_CACHE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -388,7 +392,7 @@ fn ops_log_path() -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-fn ops_log_path() -> Option<PathBuf> {
+fn configured_ops_log_path() -> Option<PathBuf> {
     Some(std::env::temp_dir().join(format!("holla-{}-ops.log", std::process::id())))
 }
 

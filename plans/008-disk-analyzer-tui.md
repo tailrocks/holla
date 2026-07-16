@@ -112,9 +112,10 @@ After the dependency plans land:
      `"$dir/$name"` empty-var collapse class).
    - `Trash` mode: use the **`trash` crate** (crates.io `trash`, latest 5.x;
      dual MIT/Apache-2.0 — VERIFY the license in its Cargo.toml before
-     adding, STOP if it changed). Crate-first operator directive: it uses
-     the proper macOS API (Finder "Put Back" metadata preserved), handles
-     collisions, needs no GUI session, and already implements the XDG trash
+     adding, STOP if it changed). On macOS, force its `NsFileManager`
+     backend: this uses the native API, handles collisions, and needs no GUI
+     session or Finder/AppleScript automation. Finder "Put Back" metadata is
+     not guaranteed by this backend. The crate also implements the XDG trash
      spec for the future Linux port. On a `trash` error for an item, report
      it as `failed` with the error string (do NOT fall back to permanent
      deletion).
@@ -277,8 +278,8 @@ skips `validate`; (3) confirm dialog cannot default-activate Delete
 - `ScanHandle`'s API (006) doesn't fit the screen's needs — report the gap;
   don't fork engine logic into the UI.
 - The `trash` crate's license changed from MIT/Apache-2.0, or its macOS
-  behavior surprises in smoke (items not in Trash, no Put Back) — report
-  exactly what happened.
+  behavior surprises in smoke (items not in Trash) — report exactly what
+  happened. Finder "Put Back" is explicitly not guaranteed.
 - Any test in the validator corpus fails and the fix would WEAKEN a rule.
 
 ## Maintenance notes
