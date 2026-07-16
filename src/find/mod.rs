@@ -186,10 +186,10 @@ fn spawn_indexer(
                         .read()
                         .ok()
                         .and_then(|guard| guard.as_ref().map(FilePicker::get_scan_progress));
-                    if let Some(progress) = progress {
-                        if !progress.is_scanning {
-                            break;
-                        }
+                    if let Some(progress) = progress
+                        && !progress.is_scanning
+                    {
+                        break;
                     }
                     thread::sleep(ROOT_POLL);
                 }

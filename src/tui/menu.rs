@@ -723,11 +723,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_probe_still_builds_disk_and_cleanup_groups() {
+    fn empty_probe_still_builds_always_available_groups() {
         let menu = menu(&Probe::empty());
-        assert_eq!(menu.groups.len(), 2);
-        assert_eq!(menu.groups[0].id, "disk");
-        assert_eq!(menu.groups[1].id, "cleanup");
+        assert_eq!(menu.groups.len(), 3);
+        assert_eq!(menu.groups[0].id, "find");
+        assert_eq!(menu.groups[1].id, "disk");
+        assert_eq!(menu.groups[2].id, "cleanup");
     }
 
     #[test]

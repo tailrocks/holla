@@ -1,6 +1,7 @@
 mod current_folder;
 mod disk;
 mod docker;
+mod find;
 mod gradle;
 mod insights;
 mod repos;
@@ -18,6 +19,7 @@ pub trait Provider: Send {
 
 pub fn all_providers() -> Vec<Box<dyn Provider>> {
     vec![
+        Box::new(find::FindProvider),
         Box::new(disk::DiskProvider),
         Box::new(current_folder::CurrentFolderProvider),
         Box::new(repos::ReposProvider),
@@ -68,6 +70,7 @@ pub fn spawn_scans() -> mpsc::Receiver<ScanEvent> {
 #[cfg(test)]
 pub fn groups_from_probe(probe: &Probe) -> Vec<GroupSpec> {
     [
+        Some(find::group()),
         Some(disk::group()),
         current_folder::group(probe),
         repos::group(probe),

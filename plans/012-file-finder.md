@@ -11,6 +11,7 @@
 
 ## Status
 
+- **Completed**: 2026-07-17
 - **Priority**: P3
 - **Effort**: L
 - **Risk**: MED (external SDK integration; scanning scope on real homes)
@@ -184,15 +185,27 @@ registration (1), highlight projection (2). UI: manual smoke per policy.
 
 ## Done criteria
 
-- [ ] Spike verdict recorded with evidence and a defensible choice per the
+- [x] Spike verdict recorded with evidence and a defensible choice per the
       decision rule.
-- [ ] Typing in the finder returns ranked hits while indexing continues
+- [x] Typing in the finder returns ranked hits while indexing continues
       (manual smoke recorded, no UI freeze).
-- [ ] `~/Library/Mobile Documents` never traversed (test or code-cited
+- [x] `~/Library/Mobile Documents` never traversed (test or code-cited
       skip rule).
-- [ ] All new deps' licenses recorded in the spike verdict
+- [x] All new deps' licenses recorded in the spike verdict
       (MIT/Apache/BSD/MPL only).
-- [ ] Four gates exit 0; `plans/README.md` row updated.
+- [x] Four gates exit 0; `plans/README.md` row updated.
+
+### Completion evidence (2026-07-17)
+
+- Exact FFF Git SHA `42f38ff66e6c62475678f05ee60c3a311e341884`;
+  exact TermRock SHA `f802fcc48c4361ea477c5021b52a121f180d4b4d` after
+  applying migrations 0019 and 0020.
+- `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo nextest run --all-features` (198 passed), and `cargo build` passed;
+  formatting check passed.
+- PTY smoke: opened `find.files`, queried `Cargo.toml` while the indexed-file
+  counter continued rising, received 100 ranked results, opened/cancelled the
+  action dialog, cleared the query, and exited with terminal restoration.
 
 ## STOP conditions
 
