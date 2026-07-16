@@ -4,6 +4,10 @@ Adaptive dev environment CLI. Run `holla` in any directory and get an interactiv
 
 No config. No setup. It just looks at what you have and shows you what's possible.
 
+## Development stance
+
+Holla is Rust-first. Prefer Rust for new project-owned commands, probes, release tooling, parsers, and long-lived automation; use another language only when an external ecosystem makes it the natural fit, and keep that exception local.
+
 Product brief, mission, and roadmap: see [PRODUCT.md](PRODUCT.md).
 
 Completed implementation-plan evidence: see
