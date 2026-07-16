@@ -569,3 +569,73 @@ fn render_preview(f: &mut ratatui::Frame, area: Rect, group: &Group, selected: u
 
     f.render_widget(paragraph, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::probe::MiseTask;
+
+    fn group<'a>(menu: &'a Menu, title: &str) -> &'a Group {
+        menu.groups
+            .iter()
+            .find(|group| group.title == title)
+            .unwrap_or_else(|| panic!("missing group {title}"))
+    }
+
+    fn action_labels(group: &Group) -> Vec<&str> {
+        group
+            .actions
+            .iter()
+            .map(|action| action.label.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn empty_probe_builds_empty_menu() {
+        assert!(Menu::build(&Probe::empty()).groups.is_empty());
+    }
+
+    #[test]
+    fn docker_probe_builds_system_cleanup_actions() {
+        let mut probe = Probe::empty();
+        probe.docker = true;
+
+        let menu = Menu::build(&probe);
+        let labels = action_labels(group(&menu, "System"));
+
+        assert!(labels.contains(&"docker: stop all containers"));
+        assert!(labels.contains(&"docker: clean everything"));
+    }
+
+    #[test]
+    fn git_repo_builds_current_folder_actions() {
+        let mut probe = Probe::empty();
+        probe.git = true;
+        probe.in_git_repo = true;
+
+        let menu = Menu::build(&probe);
+        let labels = action_labels(group(&menu, "Current folder"));
+
+        assert!(labels.contains(&"git: pull"));
+        assert!(labels.contains(&"git: push"));
+        assert!(labels.contains(&"git: status"));
+    }
+
+    #[test]
+    fn mise_task_builds_action_with_command_preview() {
+        let mut probe = Probe::empty();
+        probe.mise_tasks.push(MiseTask {
+            name: "build".into(),
+            description: "Build app".into(),
+        });
+
+        let menu = Menu::build(&probe);
+        let action = group(&menu, "Current folder")
+            .actions
+            .iter()
+            .find(|action| action.label == "mise: build")
+            .expect("mise action");
+
+        assert_eq!(action.preview, "$ mise run build");
+    }
+}

@@ -82,6 +82,29 @@ impl Probe {
     }
 }
 
+#[cfg(test)]
+impl Probe {
+    pub(crate) fn empty() -> Self {
+        Self {
+            git: false,
+            docker: false,
+            brew: false,
+            gradle: false,
+            mise: false,
+            amp: false,
+            omz: false,
+            idea: false,
+            in_git_repo: false,
+            has_mise_toml: false,
+            has_docker_compose: false,
+            has_gradle_build: false,
+            has_idea_dir: false,
+            mise_tasks: vec![],
+            parent_git_repos: vec![],
+        }
+    }
+}
+
 fn discover_mise_tasks() -> Vec<MiseTask> {
     let Ok(out) = std::process::Command::new("mise")
         .args(["tasks", "ls", "--no-header"])
@@ -91,6 +114,10 @@ fn discover_mise_tasks() -> Vec<MiseTask> {
     };
 
     let stdout = String::from_utf8_lossy(&out.stdout);
+    parse_mise_tasks(&stdout)
+}
+
+fn parse_mise_tasks(stdout: &str) -> Vec<MiseTask> {
     stdout
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -122,4 +149,36 @@ fn discover_parent_git_repos() -> Vec<String> {
         .filter(|e| e.path().join(".git").exists())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_mise_task_name_and_description() {
+        let tasks = parse_mise_tasks("build  # Build the app\n");
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].name, "build");
+        assert_eq!(tasks[0].description, "Build the app");
+    }
+
+    #[test]
+    fn parses_mise_task_without_description() {
+        let tasks = parse_mise_tasks("test\n");
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].name, "test");
+        assert!(tasks[0].description.is_empty());
+    }
+
+    #[test]
+    fn skips_blank_mise_task_lines_and_strips_description_marker() {
+        let tasks = parse_mise_tasks("\n  \nrelease    #   Publish artifacts\n");
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].name, "release");
+        assert_eq!(tasks[0].description, "Publish artifacts");
+    }
 }
