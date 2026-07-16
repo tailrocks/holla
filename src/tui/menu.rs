@@ -618,8 +618,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_probe_builds_empty_menu() {
-        assert!(menu(&Probe::empty()).groups.is_empty());
+    fn empty_probe_still_builds_disk_group() {
+        let menu = menu(&Probe::empty());
+        assert_eq!(menu.groups.len(), 1);
+        assert_eq!(menu.groups[0].id, "disk");
     }
 
     #[test]
