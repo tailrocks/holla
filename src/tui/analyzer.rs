@@ -87,12 +87,14 @@ enum AnalyzerModal {
     },
     Deleting {
         report: mpsc::Receiver<DeleteReport>,
+        mode: DeleteMode,
     },
     QuitRunning {
         state: ChoiceDialogState<QuitChoice>,
     },
     Report {
         report: DeleteReport,
+        mode: DeleteMode,
         state: DetailTableState<ReportRow>,
     },
 }
@@ -103,6 +105,59 @@ enum ModalEffect {
     OpenQuit,
     Start(DeletePlan),
     ExitAfterDelete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfirmTransition {
+    None,
+    Cancel,
+    Delete(DeleteMode),
+}
+
+fn handle_confirm_input(
+    mode: &mut DeleteMode,
+    state: &mut ChoiceDialogState<DeleteChoice>,
+    key: termrock::input::KeyEvent,
+) -> ConfirmTransition {
+    if key.code == KeyCode::Char('p') {
+        *mode = match mode {
+            DeleteMode::Trash => DeleteMode::Permanent,
+            DeleteMode::Permanent => DeleteMode::Trash,
+        };
+        return ConfirmTransition::None;
+    }
+    let actions = [
+        DialogAction {
+            id: DeleteChoice::Cancel,
+            label: "Cancel",
+            enabled: true,
+            style: None,
+        },
+        DialogAction {
+            id: DeleteChoice::Delete,
+            label: "Delete",
+            enabled: true,
+            style: None,
+        },
+    ];
+    match state.handle_key(&actions, key) {
+        Outcome::Activated(DeleteChoice::Cancel) | Outcome::Cancelled => ConfirmTransition::Cancel,
+        Outcome::Activated(DeleteChoice::Delete) => ConfirmTransition::Delete(*mode),
+        Outcome::Ignored | Outcome::Changed => ConfirmTransition::None,
+    }
+}
+
+fn requests_quit_while_deleting(key: termrock::input::KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+}
+
+fn new_delete_confirmation(items: Vec<ConfirmItem>, total: u64) -> AnalyzerModal {
+    AnalyzerModal::Confirm {
+        items,
+        total,
+        mode: DeleteMode::Trash,
+        state: ChoiceDialogState::new(Some(DeleteChoice::Cancel)),
+    }
 }
 
 const ANALYZER_HINTS: &[Hint<'static>] = &[
@@ -176,20 +231,20 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
 
     'screen: loop {
         let completed_report = match modals.current_mut() {
-            Some(AnalyzerModal::Deleting { report }) => match report.try_recv() {
-                Ok(report) => Some(report),
+            Some(AnalyzerModal::Deleting { report, mode }) => match report.try_recv() {
+                Ok(report) => Some((report, *mode)),
                 Err(mpsc::TryRecvError::Disconnected) => {
                     let mut report = DeleteReport::default();
                     report
                         .failed
                         .push((root.clone(), "cleanup worker stopped".into()));
-                    Some(report)
+                    Some((report, *mode))
                 }
                 Err(mpsc::TryRecvError::Empty) => None,
             },
             _ => None,
         };
-        if let Some(report) = completed_report {
+        if let Some((report, mode)) = completed_report {
             if exit_after_delete {
                 break 'screen;
             }
@@ -203,6 +258,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
             inaccessible = 0;
             modals.open(AnalyzerModal::Report {
                 report,
+                mode,
                 state: DetailTableState::default(),
             });
         }
@@ -250,7 +306,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
             "sizes are on-disk; APFS clones may overcount; purgeable space not included".to_owned()
         } else {
             format!(
-                "{inaccessible} items unreadable — grant Full Disk Access for a complete picture; APFS clones may overcount"
+                "{inaccessible} items unreadable — grant Full Disk Access for a complete picture; APFS clones may overcount; purgeable space not included"
             )
         };
 
@@ -361,45 +417,17 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 let effect = match modals.current_mut().expect("open modal") {
                     AnalyzerModal::Confirm {
                         items, mode, state, ..
-                    } => {
-                        if key.code == KeyCode::Char('p') {
-                            *mode = match mode {
-                                DeleteMode::Trash => DeleteMode::Permanent,
-                                DeleteMode::Permanent => DeleteMode::Trash,
-                            };
-                            ModalEffect::None
-                        } else {
-                            let actions = [
-                                DialogAction {
-                                    id: DeleteChoice::Cancel,
-                                    label: "Cancel",
-                                    enabled: true,
-                                    style: None,
-                                },
-                                DialogAction {
-                                    id: DeleteChoice::Delete,
-                                    label: "Delete",
-                                    enabled: true,
-                                    style: None,
-                                },
-                            ];
-                            match state.handle_key(&actions, key) {
-                                Outcome::Activated(DeleteChoice::Cancel) | Outcome::Cancelled => {
-                                    ModalEffect::Close
-                                }
-                                Outcome::Activated(DeleteChoice::Delete) => {
-                                    ModalEffect::Start(DeletePlan {
-                                        items: items.iter().map(|item| item.path.clone()).collect(),
-                                        mode: *mode,
-                                        dry_run: false,
-                                    })
-                                }
-                                Outcome::Ignored | Outcome::Changed => ModalEffect::None,
-                            }
-                        }
-                    }
+                    } => match handle_confirm_input(mode, state, key) {
+                        ConfirmTransition::None => ModalEffect::None,
+                        ConfirmTransition::Cancel => ModalEffect::Close,
+                        ConfirmTransition::Delete(mode) => ModalEffect::Start(DeletePlan {
+                            items: items.iter().map(|item| item.path.clone()).collect(),
+                            mode,
+                            dry_run: false,
+                        }),
+                    },
                     AnalyzerModal::Deleting { .. } => {
-                        if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+                        if requests_quit_while_deleting(key) {
                             ModalEffect::OpenQuit
                         } else {
                             ModalEffect::None
@@ -445,11 +473,12 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                         });
                     }
                     ModalEffect::Start(plan) => {
+                        let mode = plan.mode;
                         let (sender, report) = mpsc::channel();
                         tokio::task::spawn_blocking(move || {
                             let _ = sender.send(execute(&plan));
                         });
-                        modals.open(AnalyzerModal::Deleting { report });
+                        modals.open(AnalyzerModal::Deleting { report, mode });
                     }
                     ModalEffect::ExitAfterDelete => {
                         exit_after_delete = true;
@@ -466,12 +495,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                         let total = items
                             .iter()
                             .fold(0_u64, |sum, item| sum.saturating_add(item.size));
-                        modals.open(AnalyzerModal::Confirm {
-                            items,
-                            total,
-                            mode: DeleteMode::Trash,
-                            state: ChoiceDialogState::new(Some(DeleteChoice::Cancel)),
-                        });
+                        modals.open(new_delete_confirmation(items, total));
                     }
                 }
                 KeyCode::Char('f') => folding = !folding,
@@ -657,9 +681,14 @@ fn render_modal(
             let mut body = vec![
                 Line::styled(
                     format!(
-                        "{} items — {} reclaimable",
+                        "{} items — {} {}",
                         items.len(),
-                        format_size(*total, DECIMAL)
+                        format_size(*total, DECIMAL),
+                        if *mode == DeleteMode::Trash {
+                            "reclaimable after emptying Trash"
+                        } else {
+                            "will be freed"
+                        }
                     ),
                     theme.style(Role::Text),
                 ),
@@ -798,7 +827,11 @@ fn render_modal(
                 state,
             );
         }
-        AnalyzerModal::Report { report, state } => {
+        AnalyzerModal::Report {
+            report,
+            mode,
+            state,
+        } => {
             let removed = report.removed.len().to_string();
             let failed = report.failed.len().to_string();
             let skipped = report.skipped.len().to_string();
@@ -809,6 +842,11 @@ fn render_modal(
                     .fold(0_u64, |total, (_, size)| total.saturating_add(*size)),
                 DECIMAL,
             );
+            let freed_copy = if *mode == DeleteMode::Trash {
+                format!("{freed} after emptying Trash")
+            } else {
+                freed
+            };
             let log = if report.log_errors.is_empty() {
                 "recorded".to_owned()
             } else {
@@ -844,8 +882,12 @@ fn render_modal(
                 },
                 DetailRow {
                     id: ReportRow::Freed,
-                    label: "Freed",
-                    value: &freed,
+                    label: if *mode == DeleteMode::Trash {
+                        "Reclaimable"
+                    } else {
+                        "Freed"
+                    },
+                    value: &freed_copy,
                     href: None,
                     capability: DetailCapability::None,
                     emphasis: true,
@@ -866,13 +908,17 @@ fn render_modal(
                 &MessageDialog {
                     dialog: Dialog {
                         title: "Cleanup report",
-                        body: Text::from("Cleanup finished. Press Esc or Enter to return."),
+                        body: Text::from(if *mode == DeleteMode::Trash {
+                            "Moved to Trash. Empty Trash to reclaim space. Press Esc or Enter."
+                        } else {
+                            "Cleanup finished. Press Esc or Enter to return."
+                        }),
                         style: theme.style(Role::Text),
                         theme,
                         emphasis: PanelEmphasis::Focused,
                     },
                     details: &details,
-                    label_width: 10,
+                    label_width: 12,
                     wrap: false,
                     theme,
                 },
@@ -1082,8 +1128,51 @@ mod tests {
 
     #[test]
     fn delete_confirmation_focuses_cancel() {
-        let state = ChoiceDialogState::new(Some(DeleteChoice::Cancel));
+        let AnalyzerModal::Confirm { mode, state, .. } = new_delete_confirmation(vec![], 0) else {
+            panic!("confirmation modal")
+        };
+        assert_eq!(mode, DeleteMode::Trash);
         assert_eq!(state.focused, Some(DeleteChoice::Cancel));
+    }
+
+    fn key(code: KeyCode) -> termrock::input::KeyEvent {
+        termrock::input::KeyEvent::new(code, termrock::input::KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn delete_confirmation_escape_cancels_without_activation() {
+        let mut mode = DeleteMode::Trash;
+        let mut state = ChoiceDialogState::new(Some(DeleteChoice::Cancel));
+        assert_eq!(
+            handle_confirm_input(&mut mode, &mut state, key(KeyCode::Esc)),
+            ConfirmTransition::Cancel
+        );
+    }
+
+    #[test]
+    fn permanent_delete_requires_p_then_explicit_delete_activation() {
+        let mut mode = DeleteMode::Trash;
+        let mut state = ChoiceDialogState::new(Some(DeleteChoice::Cancel));
+        assert_eq!(
+            handle_confirm_input(&mut mode, &mut state, key(KeyCode::Char('p'))),
+            ConfirmTransition::None
+        );
+        assert_eq!(mode, DeleteMode::Permanent);
+        assert_eq!(
+            handle_confirm_input(&mut mode, &mut state, key(KeyCode::Right)),
+            ConfirmTransition::None
+        );
+        assert_eq!(
+            handle_confirm_input(&mut mode, &mut state, key(KeyCode::Enter)),
+            ConfirmTransition::Delete(DeleteMode::Permanent)
+        );
+    }
+
+    #[test]
+    fn deleting_q_requests_confirmation_instead_of_immediate_exit() {
+        assert!(requests_quit_while_deleting(key(KeyCode::Char('q'))));
+        assert!(requests_quit_while_deleting(key(KeyCode::Esc)));
+        assert!(!requests_quit_while_deleting(key(KeyCode::Enter)));
     }
 
     #[test]

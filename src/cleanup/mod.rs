@@ -8,6 +8,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+// Threat model: holla runs unprivileged for one interactive user. Platform
+// Trash and std filesystem APIs accept pathnames, so they cannot atomically
+// pin every parent directory against a concurrent malicious rename. We reject
+// symlink ancestors and revalidate the canonical parent immediately before
+// mutation, but do not claim protection from an attacker racing that final
+// syscall. Never invoke this module through sudo or another privilege boundary.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteMode {
     Trash,
@@ -122,17 +129,8 @@ fn execute_with_log_path(plan: &DeletePlan, log_path: Option<&Path>) -> DeleteRe
             continue;
         }
 
-        if let Err(rejection) = validate_execution_path(path) {
-            record(
-                &mut report,
-                log_path,
-                plan,
-                path,
-                0,
-                "skipped",
-                Some(&rejection.0),
-            );
-            report.skipped.push((path.clone(), rejection.0));
+        if let Err(error) = validate_execution_path(path) {
+            record_runtime_validation_error(&mut report, log_path, plan, path, 0, error);
             continue;
         }
 
@@ -159,18 +157,9 @@ fn execute_with_log_path(plan: &DeletePlan, log_path: Option<&Path>) -> DeleteRe
         // safety decision. The final component is intentionally not resolved:
         // a selected symlink must remove only that link.
         if !plan.dry_run
-            && let Err(rejection) = validate_execution_path(path)
+            && let Err(error) = validate_execution_path(path)
         {
-            record(
-                &mut report,
-                log_path,
-                plan,
-                path,
-                size,
-                "skipped",
-                Some(&rejection.0),
-            );
-            report.skipped.push((path.clone(), rejection.0));
+            record_runtime_validation_error(&mut report, log_path, plan, path, size, error);
             continue;
         }
 
@@ -178,7 +167,7 @@ fn execute_with_log_path(plan: &DeletePlan, log_path: Option<&Path>) -> DeleteRe
             Ok(())
         } else {
             match plan.mode {
-                DeleteMode::Trash => trash::delete(path).map_err(|error| error.to_string()),
+                DeleteMode::Trash => move_to_trash(path),
                 DeleteMode::Permanent => {
                     permanently_remove(path).map_err(|error| error.to_string())
                 }
@@ -218,18 +207,56 @@ fn permanently_remove(path: &Path) -> std::io::Result<()> {
     }
 }
 
-fn validate_execution_path(path: &Path) -> Result<(), Rejection> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| Rejection("path has no parent".into()))?;
-    reject_symlink_ancestors(parent)?;
-    let name = path
-        .file_name()
-        .ok_or_else(|| Rejection("path has no final component".into()))?;
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|error| Rejection(format!("path parent cannot be resolved: {error}")))?;
-    validate(&canonical_parent.join(name))
+enum ExecutionValidationError {
+    Rejected(Rejection),
+    Unavailable(String),
+}
+
+fn validate_execution_path(path: &Path) -> Result<(), ExecutionValidationError> {
+    let parent = path.parent().ok_or_else(|| {
+        ExecutionValidationError::Rejected(Rejection("path has no parent".into()))
+    })?;
+    reject_symlink_ancestors(parent).map_err(ExecutionValidationError::Rejected)?;
+    let name = path.file_name().ok_or_else(|| {
+        ExecutionValidationError::Rejected(Rejection("path has no final component".into()))
+    })?;
+    let canonical_parent = parent.canonicalize().map_err(|error| {
+        ExecutionValidationError::Unavailable(format!("path parent cannot be resolved: {error}"))
+    })?;
+    validate(&canonical_parent.join(name)).map_err(ExecutionValidationError::Rejected)
+}
+
+fn record_runtime_validation_error(
+    report: &mut DeleteReport,
+    log_path: Option<&Path>,
+    plan: &DeletePlan,
+    path: &Path,
+    size: u64,
+    error: ExecutionValidationError,
+) {
+    let (outcome, message) = match error {
+        ExecutionValidationError::Rejected(rejection) => ("skipped", rejection.0),
+        ExecutionValidationError::Unavailable(message) => ("failed", message),
+    };
+    record(report, log_path, plan, path, size, outcome, Some(&message));
+    if outcome == "skipped" {
+        report.skipped.push((path.to_path_buf(), message));
+    } else {
+        report.failed.push((path.to_path_buf(), message));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn move_to_trash(path: &Path) -> Result<(), String> {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+    let mut context = trash::TrashContext::default();
+    context.set_delete_method(DeleteMethod::NsFileManager);
+    context.delete(path).map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn move_to_trash(path: &Path) -> Result<(), String> {
+    trash::delete(path).map_err(|error| error.to_string())
 }
 
 fn reject_symlink_ancestors(parent: &Path) -> Result<(), Rejection> {
@@ -520,6 +547,20 @@ mod tests {
     }
 
     #[test]
+    fn nonexistent_parent_is_failed_not_skipped() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("missing-parent/missing-child");
+        let report = execute(&DeletePlan {
+            items: vec![path.clone()],
+            mode: DeleteMode::Permanent,
+            dry_run: false,
+        });
+        assert!(report.skipped.is_empty());
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(report.failed[0].0, path);
+    }
+
+    #[test]
     fn rejected_path_is_skipped() {
         let report = execute(&DeletePlan {
             items: vec![PathBuf::from("/")],
@@ -544,6 +585,23 @@ mod tests {
             dry_run: false,
         });
         assert_eq!(report.removed.len(), 1);
+        assert!(!link.exists());
+        assert!(target.exists());
+    }
+
+    #[test]
+    fn trash_symlink_removes_link_not_target() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        let link = temp.path().join("trash-link");
+        fs::write(&target, b"keep").unwrap();
+        symlink(&target, &link).unwrap();
+        let report = execute(&DeletePlan {
+            items: vec![link.clone()],
+            mode: DeleteMode::Trash,
+            dry_run: false,
+        });
+        assert_eq!(report.removed.len(), 1, "{report:?}");
         assert!(!link.exists());
         assert!(target.exists());
     }
