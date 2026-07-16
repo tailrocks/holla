@@ -1,3 +1,5 @@
+mod brew_services;
+mod cargo;
 mod current_folder;
 mod disk;
 mod docker;
@@ -31,8 +33,10 @@ pub fn all_providers() -> Vec<Box<dyn Provider>> {
         Box::new(just::JustProvider),
         Box::new(make::MakeProvider),
         Box::new(taskfile::TaskfileProvider),
+        Box::new(cargo::CargoProvider),
         Box::new(repos::ReposProvider),
         Box::new(system::SystemProvider),
+        Box::new(brew_services::BrewServicesProvider),
         Box::new(docker::DockerProvider),
         Box::new(gradle::GradleProvider),
         Box::new(insights::InsightsProvider),
