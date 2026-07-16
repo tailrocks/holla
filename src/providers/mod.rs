@@ -4,9 +4,12 @@ mod docker;
 mod find;
 mod gradle;
 mod insights;
+mod just;
+mod make;
 mod node_scripts;
 mod repos;
 mod system;
+mod taskfile;
 mod user;
 
 use crate::model::GroupSpec;
@@ -25,6 +28,9 @@ pub fn all_providers() -> Vec<Box<dyn Provider>> {
         Box::new(disk::DiskProvider),
         Box::new(current_folder::CurrentFolderProvider),
         Box::new(node_scripts::NodeScriptsProvider),
+        Box::new(just::JustProvider),
+        Box::new(make::MakeProvider),
+        Box::new(taskfile::TaskfileProvider),
         Box::new(repos::ReposProvider),
         Box::new(system::SystemProvider),
         Box::new(docker::DockerProvider),
