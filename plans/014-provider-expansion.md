@@ -10,6 +10,7 @@
 
 ## Status
 
+- **Completed**: 2026-07-17
 - **Priority**: P3
 - **Effort**: M
 - **Risk**: LOW-MED (each provider is additive and isolated; danger levels
@@ -147,15 +148,29 @@ convention.
 
 ## Done criteria
 
-- [ ] Seven providers registered; each contributes only when detected
+- [x] Seven providers registered; each contributes only when detected
       (absence tests included).
-- [ ] All enumeration parsers are pure functions with fixture tests.
-- [ ] `grep -rn '"sh", "-c"\|"sh".into()' src/providers/` → no matches
+- [x] All enumeration parsers are pure functions with fixture tests.
+- [x] `grep -rn '"sh", "-c"\|"sh".into()' src/providers/` → no matches
       (argv arrays only).
-- [ ] `cargo clean` and "delete merged branches" are Destructive
+- [x] `cargo clean` and "delete merged branches" are Destructive
       (test-enforced) and confirm with exact-content dialogs.
-- [ ] Per-provider caps enforced (test) and surfaced in group titles.
-- [ ] Four gates exit 0; `plans/README.md` row updated.
+- [x] Per-provider caps enforced (test) and surfaced in group titles.
+- [x] Four gates exit 0; `plans/README.md` row updated.
+
+### Completion evidence (2026-07-17)
+
+- Seven providers registered; 31 focused provider tests plus an empty-project,
+  empty-PATH integration test cover parsing, detection absence, caps, and danger.
+- Warm `brew services list --json` measured 2.58 s, tripping the 200 ms STOP
+  threshold. A versioned five-minute cache removes Homebrew startup from the
+  normal path; cold refresh remains isolated on its post-first-paint worker.
+- Scratch Git smoke detected one merged branch, blocked deletion without
+  `--yes`, deleted only that branch with `--yes`, and preserved `main`.
+- `cargo fmt --all --check`, clippy with warnings denied, 253/253 nextest tests,
+  `cargo build`, and the argv-only grep passed. PTY smoke painted while scans
+  ran, search `test` surfaced Cargo and cross-provider matches, and terminal
+  state restored cleanly.
 
 ## STOP conditions
 

@@ -33,6 +33,10 @@ Select an action and watch it run with live output per task, side by side.
 |---|---|
 | **macOS** | Upgrade brew, brew casks, mise, amp — all in parallel |
 | **Git** | Pull / push / status across all repos in the current directory |
+| **Project tasks** | Run package.json, Just, Make, Taskfile, and mise tasks |
+| **Cargo** | Build, test, clippy, and confirmed clean |
+| **Git hygiene** | Fetch/prune, garbage collect, and confirmed merged-branch deletion |
+| **Brew services** | Start, stop, and restart detected services |
 | **Docker** | Stop all containers, full clean (containers + images + volumes) |
 | **Gradle** | Stop daemon, clean build directories |
 | **IntelliJ IDEA** | Remove `.idea` dirs and `.iml` files |

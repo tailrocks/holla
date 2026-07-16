@@ -40,6 +40,38 @@ fn list_json_has_versioned_schema() {
 }
 
 #[test]
+fn empty_environment_omits_expansion_providers() {
+    let directory = TempDir::new().unwrap();
+    let output = command(&directory)
+        .env("PATH", directory.path())
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let ids = value["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|action| action["id"].as_str())
+        .collect::<Vec<_>>();
+    for prefix in [
+        "node.script.",
+        "just.recipe.",
+        "make.target.",
+        "taskfile.task.",
+        "cargo.",
+        "brew.service.",
+        "git.fetch-prune",
+    ] {
+        assert!(
+            ids.iter().all(|id| !id.starts_with(prefix)),
+            "unexpected provider action with prefix {prefix}"
+        );
+    }
+}
+
+#[test]
 fn unknown_action_exits_two() {
     let directory = TempDir::new().unwrap();
     command(&directory)
