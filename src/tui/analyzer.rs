@@ -1,31 +1,29 @@
 use crate::{
-    cleanup::{DeleteMode, DeletePlan, DeleteReport, execute, operation_log_path},
     du::{NodeId, NodeState, ScanEvent, ScanHandle, ScanOptions, ScanTree, SortKey, scan},
+    tui::cleanup_flow::{CleanupFlow, CleanupItem, CleanupPolicy, CleanupPoll},
 };
 use crossterm::event::{self, Event, KeyEventKind};
 use humansize::{DECIMAL, format_size};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Layout},
-    text::{Line, Text},
+    text::Line,
     widgets::{Paragraph, Wrap},
 };
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
-    sync::{atomic::Ordering, mpsc},
+    sync::atomic::Ordering,
     time::Duration,
 };
 use termrock::{
     input::KeyCode,
-    interaction::{ModalStack, Outcome},
     layout::centered_rect,
     style::{Role, Theme},
     widgets::{
-        Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, DetailCapability,
-        DetailRow, DetailTableState, Dialog, Hint, HintBar, MessageDialog, Panel, PanelEmphasis,
-        Progress, ProgressKind, StatusBar, StatusBarState, StatusSlot, TextInput, TextInputOutcome,
-        TextInputState, Tree, TreeNode, TreeNodeStatus, TreeOutcome, TreeState, Validation,
+        Backdrop, Hint, HintBar, Panel, PanelEmphasis, Progress, ProgressKind, StatusBar,
+        StatusBarState, StatusSlot, TextInput, TextInputOutcome, TextInputState, Tree, TreeNode,
+        TreeNodeStatus, TreeOutcome, TreeState, Validation,
     },
 };
 
@@ -50,156 +48,6 @@ pub const FOLD_SET: &[&str] = &[
 enum HeaderSlot {
     Root,
     Scan,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeleteChoice {
-    Cancel,
-    Delete,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QuitChoice {
-    Stay,
-    Leave,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReportRow {
-    Removed,
-    Failed,
-    Skipped,
-    Freed,
-    Log,
-}
-
-struct ConfirmItem {
-    path: PathBuf,
-    size: u64,
-}
-
-enum AnalyzerModal {
-    Confirm {
-        items: Vec<ConfirmItem>,
-        total: u64,
-        mode: DeleteMode,
-        state: ChoiceDialogState<DeleteChoice>,
-    },
-    Deleting {
-        report: mpsc::Receiver<DeleteReport>,
-        mode: DeleteMode,
-    },
-    QuitRunning {
-        state: ChoiceDialogState<QuitChoice>,
-    },
-    Report {
-        report: DeleteReport,
-        mode: DeleteMode,
-        state: Box<DetailTableState<ReportRow>>,
-    },
-}
-
-enum ModalEffect {
-    None,
-    Close,
-    OpenQuit,
-    Start(DeletePlan),
-    ExitAfterDelete,
-}
-
-const REPORT_ISSUE_LIMIT: usize = 6;
-
-fn report_body_lines(report: &DeleteReport, mode: DeleteMode) -> Vec<String> {
-    let mut lines = vec![if mode == DeleteMode::Trash {
-        "Moved to Trash. Empty Trash to reclaim space. Press Esc or Enter.".to_owned()
-    } else {
-        "Cleanup finished. Press Esc or Enter to return.".to_owned()
-    }];
-    let total_issues = report.failed.len() + report.skipped.len();
-    if total_issues > 0 {
-        lines.push(String::new());
-        lines.extend(
-            report
-                .failed
-                .iter()
-                .map(|(path, reason)| format!("Failed: {} — {reason}", path.display()))
-                .chain(
-                    report
-                        .skipped
-                        .iter()
-                        .map(|(path, reason)| format!("Skipped: {} — {reason}", path.display())),
-                )
-                .take(REPORT_ISSUE_LIMIT),
-        );
-        if total_issues > REPORT_ISSUE_LIMIT {
-            lines.push(format!(
-                "…and {} more; see the operation log.",
-                total_issues - REPORT_ISSUE_LIMIT
-            ));
-        }
-    }
-    lines.push(format!(
-        "Full log: {}",
-        operation_log_path().map_or_else(
-            || "unavailable".to_owned(),
-            |path| path.display().to_string()
-        )
-    ));
-    lines
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConfirmTransition {
-    None,
-    Cancel,
-    Delete(DeleteMode),
-}
-
-fn handle_confirm_input(
-    mode: &mut DeleteMode,
-    state: &mut ChoiceDialogState<DeleteChoice>,
-    key: termrock::input::KeyEvent,
-) -> ConfirmTransition {
-    if key.code == KeyCode::Char('p') {
-        *mode = match mode {
-            DeleteMode::Trash => DeleteMode::Permanent,
-            DeleteMode::Permanent => DeleteMode::Trash,
-        };
-        return ConfirmTransition::None;
-    }
-    let actions = [
-        DialogAction {
-            id: DeleteChoice::Cancel,
-            label: "Cancel",
-            enabled: true,
-            style: None,
-        },
-        DialogAction {
-            id: DeleteChoice::Delete,
-            label: "Delete",
-            enabled: true,
-            style: None,
-        },
-    ];
-    match state.handle_key(&actions, key) {
-        Outcome::Activated(DeleteChoice::Cancel) | Outcome::Cancelled => ConfirmTransition::Cancel,
-        Outcome::Activated(DeleteChoice::Delete) => ConfirmTransition::Delete(*mode),
-        Outcome::Ignored | Outcome::Changed => ConfirmTransition::None,
-        _ => ConfirmTransition::None,
-    }
-}
-
-fn requests_quit_while_deleting(key: termrock::input::KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-}
-
-fn new_delete_confirmation(items: Vec<ConfirmItem>, total: u64) -> AnalyzerModal {
-    AnalyzerModal::Confirm {
-        items,
-        total,
-        mode: DeleteMode::Trash,
-        state: ChoiceDialogState::new(Some(DeleteChoice::Cancel)),
-    }
 }
 
 const ANALYZER_HINTS: &[Hint<'static>] = &[
@@ -260,8 +108,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
     let mut bytes_seen = 0_u64;
     let mut inaccessible = 0_u64;
     let mut tick = 0_u64;
-    let mut modals = ModalStack::new();
-    let mut exit_after_delete = false;
+    let mut cleanup = CleanupFlow::new();
     let root_label = root.display().to_string();
 
     let mut session = termrock::crossterm::Session::enter(
@@ -272,37 +119,19 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     'screen: loop {
-        let completed_report = match modals.current_mut() {
-            Some(AnalyzerModal::Deleting { report, mode }) => match report.try_recv() {
-                Ok(report) => Some((report, *mode)),
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    let mut report = DeleteReport::default();
-                    report
-                        .failed
-                        .push((root.clone(), "cleanup worker stopped".into()));
-                    Some((report, *mode))
-                }
-                Err(mpsc::TryRecvError::Empty) => None,
-            },
-            _ => None,
-        };
-        if let Some((report, mode)) = completed_report {
-            if exit_after_delete {
-                break 'screen;
+        match cleanup.poll() {
+            CleanupPoll::Exit => break 'screen,
+            CleanupPoll::Completed => {
+                handle.cancel.store(true, Ordering::Release);
+                handle = scan(ScanOptions::new(&root));
+                expanded = HashSet::from([NodeId(0)]);
+                tree_state = TreeState::new(Some(NodeId(0)));
+                tree_state.enable_multi_select();
+                scanning = true;
+                bytes_seen = 0;
+                inaccessible = 0;
             }
-            handle.cancel.store(true, Ordering::Release);
-            handle = scan(ScanOptions::new(&root));
-            expanded = HashSet::from([NodeId(0)]);
-            tree_state = TreeState::new(Some(NodeId(0)));
-            tree_state.enable_multi_select();
-            scanning = true;
-            bytes_seen = 0;
-            inaccessible = 0;
-            modals.open(AnalyzerModal::Report {
-                report,
-                mode,
-                state: Box::default(),
-            });
+            CleanupPoll::None => {}
         }
         drain_scan_events(&handle, &mut scanning, &mut bytes_seen, &mut inaccessible);
         let (rows, root_bytes, selected_count, selected_bytes) = {
@@ -424,7 +253,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 HintBar::new(ANALYZER_HINTS, &theme).separator(" · "),
                 hints_area,
             );
-            render_modal(frame, &mut modals, &theme, tick, exit_after_delete);
+            cleanup.render(frame, &theme, tick);
         })?;
 
         tick = tick.wrapping_add(1);
@@ -435,79 +264,8 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 continue;
             }
             let key = termrock::input::KeyEvent::from(key);
-            if modals.is_open() {
-                let effect = match modals.current_mut().expect("open modal") {
-                    AnalyzerModal::Confirm {
-                        items, mode, state, ..
-                    } => match handle_confirm_input(mode, state, key) {
-                        ConfirmTransition::None => ModalEffect::None,
-                        ConfirmTransition::Cancel => ModalEffect::Close,
-                        ConfirmTransition::Delete(mode) => ModalEffect::Start(DeletePlan {
-                            items: items.iter().map(|item| item.path.clone()).collect(),
-                            mode,
-                            dry_run: false,
-                        }),
-                    },
-                    AnalyzerModal::Deleting { .. } => {
-                        if requests_quit_while_deleting(key) {
-                            ModalEffect::OpenQuit
-                        } else {
-                            ModalEffect::None
-                        }
-                    }
-                    AnalyzerModal::QuitRunning { state } => {
-                        let actions = [
-                            DialogAction {
-                                id: QuitChoice::Stay,
-                                label: "Stay",
-                                enabled: true,
-                                style: None,
-                            },
-                            DialogAction {
-                                id: QuitChoice::Leave,
-                                label: "Leave when finished",
-                                enabled: true,
-                                style: None,
-                            },
-                        ];
-                        match state.handle_key(&actions, key) {
-                            Outcome::Activated(QuitChoice::Stay) | Outcome::Cancelled => {
-                                ModalEffect::Close
-                            }
-                            Outcome::Activated(QuitChoice::Leave) => ModalEffect::ExitAfterDelete,
-                            Outcome::Ignored | Outcome::Changed => ModalEffect::None,
-                            _ => ModalEffect::None,
-                        }
-                    }
-                    AnalyzerModal::Report { .. } => {
-                        if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter) {
-                            ModalEffect::Close
-                        } else {
-                            ModalEffect::None
-                        }
-                    }
-                };
-                match effect {
-                    ModalEffect::None => {}
-                    ModalEffect::Close => modals.pop(),
-                    ModalEffect::OpenQuit => {
-                        modals.open_sub(AnalyzerModal::QuitRunning {
-                            state: ChoiceDialogState::new(Some(QuitChoice::Stay)),
-                        });
-                    }
-                    ModalEffect::Start(plan) => {
-                        let mode = plan.mode;
-                        let (sender, report) = mpsc::channel();
-                        tokio::task::spawn_blocking(move || {
-                            let _ = sender.send(execute(&plan));
-                        });
-                        modals.open(AnalyzerModal::Deleting { report, mode });
-                    }
-                    ModalEffect::ExitAfterDelete => {
-                        exit_after_delete = true;
-                        modals.pop();
-                    }
-                }
+            if cleanup.is_open() {
+                cleanup.handle_key(key);
                 continue;
             }
             match key.code {
@@ -515,10 +273,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 KeyCode::Char('d') | KeyCode::Backspace => {
                     let items = selected_items(&handle, &tree_state, &root);
                     if !items.is_empty() {
-                        let total = items
-                            .iter()
-                            .fold(0_u64, |sum, item| sum.saturating_add(item.size));
-                        modals.open(new_delete_confirmation(items, total));
+                        cleanup.open_confirmation(items, CleanupPolicy::default());
                     }
                 }
                 KeyCode::Char('f') => folding = !folding,
@@ -684,273 +439,6 @@ fn drain_scan_events(
     }
 }
 
-fn render_modal(
-    frame: &mut ratatui::Frame<'_>,
-    modals: &mut ModalStack<AnalyzerModal>,
-    theme: &Theme,
-    tick: u64,
-    exit_after_delete: bool,
-) {
-    let Some(modal) = modals.current_mut() else {
-        return;
-    };
-    frame.render_widget(Backdrop::default(), frame.area());
-    match modal {
-        AnalyzerModal::Confirm {
-            items,
-            total,
-            mode,
-            state,
-        } => {
-            let mut body = vec![
-                Line::styled(
-                    format!(
-                        "{} items — {} {}",
-                        items.len(),
-                        format_size(*total, DECIMAL),
-                        if *mode == DeleteMode::Trash {
-                            "reclaimable after emptying Trash"
-                        } else {
-                            "will be freed"
-                        }
-                    ),
-                    theme.style(Role::Text),
-                ),
-                Line::styled(
-                    match mode {
-                        DeleteMode::Trash => "Mode: Move to Trash",
-                        DeleteMode::Permanent => "Mode: PERMANENT DELETE",
-                    },
-                    theme.style(if *mode == DeleteMode::Trash {
-                        Role::Success
-                    } else {
-                        Role::Danger
-                    }),
-                ),
-                Line::raw(""),
-            ];
-            body.extend(items.iter().take(10).map(|item| {
-                Line::styled(
-                    format!(
-                        "{}  {}",
-                        format_size(item.size, DECIMAL),
-                        item.path.display()
-                    ),
-                    theme.style(Role::TextMuted),
-                )
-            }));
-            if items.len() > 10 {
-                body.push(Line::styled(
-                    format!("…and {} more", items.len() - 10),
-                    theme.style(Role::TextMuted),
-                ));
-            }
-            if *mode == DeleteMode::Permanent {
-                body.push(Line::styled(
-                    "Permanent deletion cannot be undone.",
-                    theme.style(Role::Danger),
-                ));
-            } else {
-                body.push(Line::styled(
-                    "Press p to switch to permanent deletion.",
-                    theme.style(Role::Warning),
-                ));
-            }
-            let actions = [
-                DialogAction {
-                    id: DeleteChoice::Cancel,
-                    label: "Cancel",
-                    enabled: true,
-                    style: None,
-                },
-                DialogAction {
-                    id: DeleteChoice::Delete,
-                    label: "Delete",
-                    enabled: true,
-                    style: Some(theme.style(Role::Danger)),
-                },
-            ];
-            let area = centered_rect(76, 18, frame.area());
-            frame.render_stateful_widget(
-                &ChoiceDialog::new(
-                    Dialog::new("Confirm cleanup", Text::from(body), theme)
-                        .style(theme.style(Role::Text))
-                        .emphasis(PanelEmphasis::Focused),
-                    &actions,
-                )
-                .gap("  "),
-                area,
-                state,
-            );
-        }
-        AnalyzerModal::Deleting { .. } => {
-            let area = centered_rect(58, 7, frame.area());
-            frame.render_widget(
-                Dialog::new(
-                    "Cleanup in progress",
-                    Text::from(if exit_after_delete {
-                        "Finishing safely; holla will exit afterward."
-                    } else {
-                        "Moving selected items. This operation cannot be interrupted."
-                    }),
-                    theme,
-                )
-                .style(theme.style(Role::Text))
-                .emphasis(PanelEmphasis::Focused),
-                area,
-            );
-            frame.render_widget(
-                Progress::new(ProgressKind::Indeterminate { tick }, theme).label("Cleaning up"),
-                ratatui::layout::Rect::new(
-                    area.x.saturating_add(2),
-                    area.bottom().saturating_sub(2),
-                    area.width.saturating_sub(4),
-                    1,
-                ),
-            );
-        }
-        AnalyzerModal::QuitRunning { state } => {
-            let actions = [
-                DialogAction {
-                    id: QuitChoice::Stay,
-                    label: "Stay",
-                    enabled: true,
-                    style: None,
-                },
-                DialogAction {
-                    id: QuitChoice::Leave,
-                    label: "Leave when finished",
-                    enabled: true,
-                    style: Some(theme.style(Role::Warning)),
-                },
-            ];
-            let area = centered_rect(64, 8, frame.area());
-            frame.render_stateful_widget(
-                &ChoiceDialog::new(
-                    Dialog::new(
-                        "Cleanup still running",
-                        Text::from(
-                            "Deletion cannot be interrupted. Leave automatically after it finishes?",
-                        ),
-                        theme,
-                    )
-                    .style(theme.style(Role::Text))
-                    .emphasis(PanelEmphasis::Focused),
-                    &actions,
-                )
-                .gap("  "),
-                area,
-                state,
-            );
-        }
-        AnalyzerModal::Report {
-            report,
-            mode,
-            state,
-        } => {
-            let body_lines = report_body_lines(report, *mode);
-            let removed = report.removed.len().to_string();
-            let failed = report.failed.len().to_string();
-            let skipped = report.skipped.len().to_string();
-            let freed = format_size(
-                report
-                    .removed
-                    .iter()
-                    .fold(0_u64, |total, (_, size)| total.saturating_add(*size)),
-                DECIMAL,
-            );
-            let freed_copy = if *mode == DeleteMode::Trash {
-                format!("{freed} after emptying Trash")
-            } else {
-                freed
-            };
-            let log = if report.log_errors.is_empty() {
-                "recorded".to_owned()
-            } else {
-                format!("{} errors", report.log_errors.len())
-            };
-            let details = [
-                DetailRow {
-                    id: ReportRow::Removed,
-                    label: "Removed",
-                    value: &removed,
-                    href: None,
-                    capability: DetailCapability::None,
-                    emphasis: true,
-                    style: Some(theme.style(Role::Success)),
-                },
-                DetailRow {
-                    id: ReportRow::Failed,
-                    label: "Failed",
-                    value: &failed,
-                    href: None,
-                    capability: DetailCapability::None,
-                    emphasis: !report.failed.is_empty(),
-                    style: (!report.failed.is_empty()).then(|| theme.style(Role::Danger)),
-                },
-                DetailRow {
-                    id: ReportRow::Skipped,
-                    label: "Skipped",
-                    value: &skipped,
-                    href: None,
-                    capability: DetailCapability::None,
-                    emphasis: !report.skipped.is_empty(),
-                    style: None,
-                },
-                DetailRow {
-                    id: ReportRow::Freed,
-                    label: if *mode == DeleteMode::Trash {
-                        "Reclaimable"
-                    } else {
-                        "Freed"
-                    },
-                    value: &freed_copy,
-                    href: None,
-                    capability: DetailCapability::None,
-                    emphasis: true,
-                    style: Some(theme.style(Role::Accent)),
-                },
-                DetailRow {
-                    id: ReportRow::Log,
-                    label: "Ops log",
-                    value: &log,
-                    href: None,
-                    capability: DetailCapability::None,
-                    emphasis: false,
-                    style: None,
-                },
-            ];
-            let area = centered_rect(
-                80,
-                u16::try_from(12_usize.saturating_add(body_lines.len().min(9))).unwrap_or(21),
-                frame.area(),
-            );
-            frame.render_stateful_widget(
-                &MessageDialog::new(
-                    Dialog::new(
-                        "Cleanup report",
-                        Text::from(
-                            body_lines
-                                .iter()
-                                .map(|line| Line::raw(line.as_str()))
-                                .collect::<Vec<_>>(),
-                        ),
-                        theme,
-                    )
-                    .style(theme.style(Role::Text))
-                    .emphasis(PanelEmphasis::Focused),
-                    &details,
-                    theme,
-                )
-                .label_width(12)
-                .wrap(false),
-                area,
-                state,
-            );
-        }
-    }
-}
-
 pub fn effective_selection(tree: &ScanTree, checked: &[NodeId]) -> (Vec<NodeId>, u64) {
     let checked_set: HashSet<_> = checked.iter().copied().collect();
     let effective: Vec<_> = checked
@@ -974,7 +462,7 @@ pub fn effective_selection(tree: &ScanTree, checked: &[NodeId]) -> (Vec<NodeId>,
     (effective, bytes)
 }
 
-fn selected_items(handle: &ScanHandle, state: &TreeState<NodeId>, root: &Path) -> Vec<ConfirmItem> {
+fn selected_items(handle: &ScanHandle, state: &TreeState<NodeId>, root: &Path) -> Vec<CleanupItem> {
     let tree = handle.tree.read().expect("disk scan tree lock");
     let checked = state
         .selection()
@@ -983,7 +471,7 @@ fn selected_items(handle: &ScanHandle, state: &TreeState<NodeId>, root: &Path) -
     effective_selection(&tree, checked)
         .0
         .into_iter()
-        .map(|id| ConfirmItem {
+        .map(|id| CleanupItem {
             path: node_path(&tree, root, id),
             size: tree.node(id).on_disk,
         })
@@ -1145,96 +633,6 @@ mod tests {
         assert_eq!(
             node_path(&fixture.tree, Path::new("/tmp/root"), fixture.root),
             PathBuf::from("/tmp/root")
-        );
-    }
-
-    #[test]
-    fn delete_confirmation_focuses_cancel() {
-        let AnalyzerModal::Confirm { mode, state, .. } = new_delete_confirmation(vec![], 0) else {
-            panic!("confirmation modal")
-        };
-        assert_eq!(mode, DeleteMode::Trash);
-        assert_eq!(state.focused, Some(DeleteChoice::Cancel));
-    }
-
-    fn key(code: KeyCode) -> termrock::input::KeyEvent {
-        termrock::input::KeyEvent::new(code, termrock::input::KeyModifiers::NONE)
-    }
-
-    #[test]
-    fn delete_confirmation_escape_cancels_without_activation() {
-        let mut mode = DeleteMode::Trash;
-        let mut state = ChoiceDialogState::new(Some(DeleteChoice::Cancel));
-        assert_eq!(
-            handle_confirm_input(&mut mode, &mut state, key(KeyCode::Esc)),
-            ConfirmTransition::Cancel
-        );
-    }
-
-    #[test]
-    fn permanent_delete_requires_p_then_explicit_delete_activation() {
-        let mut mode = DeleteMode::Trash;
-        let mut state = ChoiceDialogState::new(Some(DeleteChoice::Cancel));
-        assert_eq!(
-            handle_confirm_input(&mut mode, &mut state, key(KeyCode::Char('p'))),
-            ConfirmTransition::None
-        );
-        assert_eq!(mode, DeleteMode::Permanent);
-        assert_eq!(
-            handle_confirm_input(&mut mode, &mut state, key(KeyCode::Right)),
-            ConfirmTransition::None
-        );
-        assert_eq!(
-            handle_confirm_input(&mut mode, &mut state, key(KeyCode::Enter)),
-            ConfirmTransition::Delete(DeleteMode::Permanent)
-        );
-    }
-
-    #[test]
-    fn deleting_q_requests_confirmation_instead_of_immediate_exit() {
-        assert!(requests_quit_while_deleting(key(KeyCode::Char('q'))));
-        assert!(requests_quit_while_deleting(key(KeyCode::Esc)));
-        assert!(!requests_quit_while_deleting(key(KeyCode::Enter)));
-    }
-
-    #[test]
-    fn cleanup_report_names_failed_and_skipped_items_with_reasons() {
-        let report = DeleteReport {
-            failed: vec![(PathBuf::from("/tmp/broken"), "permission denied".into())],
-            skipped: vec![(PathBuf::from("/tmp/duplicate"), "duplicate path".into())],
-            ..DeleteReport::default()
-        };
-        let lines = report_body_lines(&report, DeleteMode::Trash).join("\n");
-        assert!(lines.contains("Failed: /tmp/broken — permission denied"));
-        assert!(lines.contains("Skipped: /tmp/duplicate — duplicate path"));
-        assert!(lines.contains("Full log:"));
-    }
-
-    #[test]
-    fn cleanup_report_bounds_issue_details_and_points_to_log() {
-        let report = DeleteReport {
-            failed: (0..9)
-                .map(|index| (PathBuf::from(format!("/tmp/{index}")), "failed".into()))
-                .collect(),
-            ..DeleteReport::default()
-        };
-        let lines = report_body_lines(&report, DeleteMode::Permanent);
-        assert_eq!(
-            lines
-                .iter()
-                .filter(|line| line.starts_with("Failed:"))
-                .count(),
-            REPORT_ISSUE_LIMIT
-        );
-        assert!(
-            lines
-                .iter()
-                .any(|line| line == "…and 3 more; see the operation log.")
-        );
-        assert!(
-            lines
-                .last()
-                .is_some_and(|line| line.starts_with("Full log:"))
         );
     }
 

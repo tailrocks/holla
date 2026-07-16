@@ -109,7 +109,12 @@ fn is_protected_user_path(path: &Path, home: &Path) -> bool {
 
 pub fn execute(plan: &DeletePlan) -> DeleteReport {
     let log_path = operation_log_path();
-    execute_with_log_path(plan, log_path.as_deref())
+    execute_with_log_path(plan, log_path.as_deref(), None)
+}
+
+pub fn execute_skipped(plan: &DeletePlan, reason: &str) -> DeleteReport {
+    let log_path = operation_log_path();
+    execute_with_log_path(plan, log_path.as_deref(), Some(reason))
 }
 
 pub fn operation_log_path() -> Option<PathBuf> {
@@ -123,7 +128,11 @@ fn is_within(path: &Path, root: &str) -> bool {
     path == Path::new(root) || path.starts_with(Path::new(root))
 }
 
-fn execute_with_log_path(plan: &DeletePlan, log_path: Option<&Path>) -> DeleteReport {
+fn execute_with_log_path(
+    plan: &DeletePlan,
+    log_path: Option<&Path>,
+    skip_reason: Option<&str>,
+) -> DeleteReport {
     let mut report = DeleteReport::default();
     let mut seen = HashSet::new();
 
@@ -178,6 +187,20 @@ fn execute_with_log_path(plan: &DeletePlan, log_path: Option<&Path>) -> DeleteRe
                 continue;
             }
         };
+
+        if let Some(reason) = skip_reason {
+            record(
+                &mut report,
+                log_path,
+                plan,
+                path,
+                size,
+                "skipped",
+                Some(reason),
+            );
+            report.skipped.push((path.clone(), reason.to_owned()));
+            continue;
+        }
 
         // Size traversal can be slow. Recheck the parent chain immediately
         // before mutation so a replaced ancestor cannot retain an earlier
@@ -713,6 +736,7 @@ mod tests {
                 dry_run: true,
             },
             Some(&log),
+            None,
         );
         assert!(report.log_errors.is_empty());
         let lines = fs::read_to_string(log).unwrap();
@@ -737,6 +761,7 @@ mod tests {
                 dry_run: false,
             },
             Some(temp.path()),
+            None,
         );
         assert_eq!(report.removed.len(), 1);
         assert_eq!(report.log_errors.len(), 1);
@@ -757,10 +782,33 @@ mod tests {
                 dry_run: true,
             },
             Some(&log),
+            None,
         );
         assert_eq!(report.removed.len(), 1);
         assert_eq!(report.failed.len(), 1);
         assert_eq!(report.skipped.len(), 1);
         assert_eq!(fs::read_to_string(log).unwrap().lines().count(), 3);
+    }
+
+    #[test]
+    fn guarded_items_are_skipped_logged_and_untouched() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("running-app-data");
+        let log = temp.path().join("ops.log");
+        fs::write(&file, b"keep").unwrap();
+        let report = execute_with_log_path(
+            &DeletePlan {
+                items: vec![file.clone()],
+                mode: DeleteMode::Trash,
+                dry_run: false,
+            },
+            Some(&log),
+            Some("App is running"),
+        );
+        assert!(file.exists());
+        assert_eq!(report.skipped, [(file, "App is running".into())]);
+        let line = fs::read_to_string(log).unwrap();
+        assert!(line.contains("\"outcome\":\"skipped\""));
+        assert!(line.contains("App is running"));
     }
 }
