@@ -1899,7 +1899,7 @@ dependencies = [
 [[package]]
 name = "termrock"
 version = "0.10.0"
-source = "git+https://github.com/tailrocks/termrock.git?rev=534e3c2db8de18da84f0d5a1211c136d0cb2d898#534e3c2db8de18da84f0d5a1211c136d0cb2d898"
+source = "git+https://github.com/tailrocks/termrock.git?rev=20ef50684f5e0ad9871f667ed425666b5e202a40#20ef50684f5e0ad9871f667ed425666b5e202a40"
 dependencies = [
  "anstyle-parse 0.2.7",
  "base64",

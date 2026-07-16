@@ -32,8 +32,8 @@ Operator directives baked into every plan:
 | 004 | Task runner: streaming output + cancellation | P1 | L | 003 | DONE — smoke: live/sequential; TERM-resistant group cancelled and reaped; terminal restored |
 | 005 | Provider/Action model, async probe, fuzzy search, confirmations | P1 | L | 003, 004 | DONE — smoke: instant streaming scan/search highlights/destructive Cancel; runner live; terminal restored |
 | 006 | Disk scan engine (streaming, cancellable, APFS-correct) | P2 | L | 002 | DONE — smoke: 2,888,437,760 B = `du` 2,820,740 KiB exactly; cancellation/Linux check green |
-| 007 | TermRock extensions (multi-select, metadata cells, progress, log pane) | P2 | L | 003 | DONE — extensions landed at `ccf0646`; consumer pinned to v0.10.0 `534e3c2` |
-| 008 | Disk analyzer TUI + validated deletion choke point | P2 | L | 005, 006, 007 | DONE — TermRock v0.10.0 `534e3c2`; smoke: 52.43 MB Trash + permanent delete, rescan, ops.log, terminal restore |
+| 007 | TermRock extensions (multi-select, metadata cells, progress, log pane) | P2 | L | 003 | DONE — extensions landed at `ccf0646`; consumer pinned to v0.10.0 `20ef506` |
+| 008 | Disk analyzer TUI + validated deletion choke point | P2 | L | 005, 006, 007 | DONE — TermRock v0.10.0 `20ef506`; smoke: 52.43 MB Trash + permanent delete, rescan, ops.log, terminal restore |
 | 009 | macOS cleanup insights taxonomy | P3 | L | 005, 006, 008 | DONE — 19 insights; `pgrep` guard (sysinfo measured 50.97 ms); fake-HOME Xcode 65.54 kB Trash round-trip + ops.log; terminal restored |
 | 010 | Launcher frecency ranking + query memory | P3 | M | 005 | TODO |
 | 011 | Disk speed pack: size cache, Spotlight top files, overview | P3 | M | 006, 008 | TODO |
