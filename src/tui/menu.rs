@@ -122,10 +122,10 @@ impl Menu {
                 handler: Box::new(|| Box::pin(run_shell("docker compose down"))),
             });
             current_actions.push(Action {
-                label: "compose: logs".into(),
-                description: "Show recent service logs".into(),
-                preview: "$ docker compose logs --tail 200".into(),
-                handler: Box::new(|| Box::pin(run_shell("docker compose logs --tail 200"))),
+                label: "compose: logs (follow)".into(),
+                description: "Follow service logs until cancelled".into(),
+                preview: "$ docker compose logs -f".into(),
+                handler: Box::new(|| Box::pin(run_shell("docker compose logs -f"))),
             });
         }
 
@@ -727,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn compose_logs_action_is_bounded() {
+    fn compose_logs_action_follows_until_cancelled() {
         let mut probe = Probe::empty();
         probe.docker = true;
         probe.has_docker_compose = true;
@@ -736,11 +736,11 @@ mod tests {
         let action = group(&menu, "Current folder")
             .actions
             .iter()
-            .find(|action| action.label == "compose: logs")
+            .find(|action| action.label == "compose: logs (follow)")
             .expect("compose logs action");
 
-        assert_eq!(action.description, "Show recent service logs");
-        assert_eq!(action.preview, "$ docker compose logs --tail 200");
+        assert_eq!(action.description, "Follow service logs until cancelled");
+        assert_eq!(action.preview, "$ docker compose logs -f");
     }
 
     #[test]

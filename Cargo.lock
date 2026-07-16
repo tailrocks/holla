@@ -677,6 +677,7 @@ dependencies = [
  "clap",
  "crossterm",
  "futures",
+ "libc",
  "ratatui",
  "termrock",
  "thiserror 2.0.18",
