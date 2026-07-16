@@ -90,7 +90,9 @@ Debian packages remain `amd64` and `arm64`; CI and release jobs use fixed runner
 labels, never `*-latest`. Holla inherits TermRock's Linux/macOS, UTF-8, modern-VT,
 truecolor baseline. There is intentionally no reduced-color or `NO_COLOR` mode.
 OSC 8/22/52 capabilities remain optional
-([TermRock README at the pinned revision](https://github.com/tailrocks/termrock/blob/371ff94effaf3363c9671a7f53b0dc606f796b67/README.md)).
+([current TermRock README](https://github.com/tailrocks/termrock/blob/main/README.md));
+the exact consumed revision remains authoritative in `Cargo.toml` and
+`Cargo.lock`.
 
 ## Module audit
 

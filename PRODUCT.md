@@ -9,9 +9,9 @@ finds, and executes chosen actions with live output.
 
 ## Platform scope
 
-- macOS first (Apple Silicon and Intel). Linux is a planned second target;
-  every subsystem keeps a platform seam (trait or `cfg` boundary) so Linux can
-  be added without redesign. Windows is out of scope.
+- macOS is the primary target (Apple Silicon and Intel). Linux has a bootable,
+  tested core slice; platform-specific providers and cleanup insights continue
+  behind trait or `cfg` seams. Windows is out of scope.
 - Terminal-only. No native app, no GUI. All UI is built from the
   [TermRock component library](https://github.com/tailrocks/termrock), pinned
   by git revision. If a UI capability is missing from TermRock, it is added to
@@ -92,5 +92,7 @@ Phases match `plans/`:
 4. Disk scan engine (006) and TermRock extensions (007).
 5. Disk analyzer TUI (008).
 6. Cleanup insights taxonomy for macOS (009).
-7. Later: Linux providers, frecency ranking for launcher, plugin and
-   user-defined actions, shell completions, and a man page.
+7. Launcher frecency, file finding, user-defined actions, provider expansion,
+   and a bootable Linux slice (010–015).
+8. Future scope: Linux feature parity, plugin loading, shell completions, and a
+   man page.

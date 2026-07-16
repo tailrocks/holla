@@ -125,39 +125,40 @@ struct PendingConfirm {
     state: ChoiceDialogState<ConfirmChoice>,
 }
 
-static MENU_KEYMAP: Keymap<MenuKey> = Keymap::new(&[
-    KeyBinding {
-        chords: &[KeyChord::plain(KeyCode::Up), KeyChord::plain(KeyCode::Down)],
-        action: MenuKey::Navigate,
-        hint: Some("navigate"),
-        visibility: Visibility::Shown,
-        glyph: Some("↑↓"),
-    },
-    KeyBinding {
-        chords: &[KeyChord::plain(KeyCode::Enter)],
-        action: MenuKey::Run,
-        hint: Some("run"),
-        visibility: Visibility::Shown,
-        glyph: Some("⏎"),
-    },
-    KeyBinding {
-        chords: &[
+static MENU_BINDINGS: &[KeyBinding<MenuKey>] = &[
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::Up), KeyChord::plain(KeyCode::Down)],
+        MenuKey::Navigate,
+        Some("navigate"),
+        Visibility::Shown,
+        Some("↑↓"),
+    ),
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::Enter)],
+        MenuKey::Run,
+        Some("run"),
+        Visibility::Shown,
+        Some("⏎"),
+    ),
+    KeyBinding::borrowed(
+        &[
             KeyChord::plain(KeyCode::Tab),
             KeyChord::plain(KeyCode::Right),
         ],
-        action: MenuKey::Preview,
-        hint: Some("preview"),
-        visibility: Visibility::Shown,
-        glyph: Some("tab"),
-    },
-    KeyBinding {
-        chords: &[KeyChord::plain(KeyCode::Esc)],
-        action: MenuKey::Quit,
-        hint: Some("clear/quit"),
-        visibility: Visibility::Shown,
-        glyph: Some("esc"),
-    },
-]);
+        MenuKey::Preview,
+        Some("preview"),
+        Visibility::Shown,
+        Some("tab"),
+    ),
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::Esc)],
+        MenuKey::Quit,
+        Some("clear/quit"),
+        Visibility::Shown,
+        Some("esc"),
+    ),
+];
+static MENU_KEYMAP: Keymap<MenuKey> = Keymap::from_static(MENU_BINDINGS);
 
 #[cfg(test)]
 fn menu_rows(menu: &Menu, query: &str, theme: &Theme) -> Vec<ListRow<'static, ActionId>> {

@@ -16,34 +16,34 @@ name = "holla"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.6", features = ["derive", "color", "help", "usage"] }
-tokio = { version = "1.52", features = ["full"] }
-ratatui = "0.30.2"
-crossterm = { version = "0.29", features = ["event-stream"] }
-termrock = { git = "https://github.com/tailrocks/termrock.git", rev = "371ff94effaf3363c9671a7f53b0dc606f796b67", features = ["crossterm"] }
-anyhow = "1.0"
-thiserror = "2.0"
-which = "8.0"
-tokio-stream = "0.1"
-futures = "0.3"
-libc = "0.2"
-nucleo-matcher = "0.3"
-unicode-segmentation = "1.13"
-jwalk = "0.8"
+clap = { version = "=4.6.2", features = ["derive", "color", "help", "usage"] }
+tokio = { version = "=1.52.4", features = ["full"] }
+ratatui = "=0.30.2"
+crossterm = { version = "=0.29.0", features = ["event-stream"] }
+termrock = { git = "https://github.com/tailrocks/termrock.git", rev = "56b856be6195cdd632c546334016df02fb9aaeff", features = ["crossterm"] }
+anyhow = "=1.0.103"
+thiserror = "=2.0.18"
+which = "=8.0.5"
+tokio-stream = "=0.1.18"
+futures = "=0.3.32"
+libc = "=0.2.186"
+nucleo-matcher = "=0.3.1"
+unicode-segmentation = "=1.13.3"
+jwalk = "=0.8.1"
 fff-search = { git = "https://github.com/dmtrKovalenko/fff.git", rev = "b14c31d137e108b7c520d0d9e0b0017a1a88141d" }
-rayon = "1"
-dashmap = "6"
-dirs = "6"
-humansize = "2.1"
-humantime = "2.4"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-trash = "5.2.6"
+rayon = "=1.12.0"
+dashmap = "=6.2.1"
+dirs = "=6.0.0"
+humansize = "=2.1.3"
+humantime = "=2.4.0"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+trash = "=5.2.6"
 toml = "=1.1.3"
 sha2 = "=0.11.0"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "=3.27.0"
 assert_cmd = "=2.2.2"
 predicates = "=3.1.4"
 

@@ -187,90 +187,92 @@ enum StatusSlotId {
     Counts,
 }
 
-static RUNNER_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[
-    KeyBinding {
-        chords: &[
+static RUNNER_BINDINGS: &[KeyBinding<RunnerKey>] = &[
+    KeyBinding::borrowed(
+        &[
             KeyChord::plain(KeyCode::Left),
             KeyChord::plain(KeyCode::Char('h')),
         ],
-        action: RunnerKey::PreviousTask,
-        hint: Some("previous task"),
-        visibility: Visibility::Shown,
-        glyph: Some("←"),
-    },
-    KeyBinding {
-        chords: &[
+        RunnerKey::PreviousTask,
+        Some("previous task"),
+        Visibility::Shown,
+        Some("←"),
+    ),
+    KeyBinding::borrowed(
+        &[
             KeyChord::plain(KeyCode::Right),
             KeyChord::plain(KeyCode::Char('l')),
         ],
-        action: RunnerKey::NextTask,
-        hint: Some("next task"),
-        visibility: Visibility::Shown,
-        glyph: Some("→"),
-    },
-    KeyBinding {
-        chords: &[
+        RunnerKey::NextTask,
+        Some("next task"),
+        Visibility::Shown,
+        Some("→"),
+    ),
+    KeyBinding::borrowed(
+        &[
             KeyChord::plain(KeyCode::Up),
             KeyChord::plain(KeyCode::Char('k')),
         ],
-        action: RunnerKey::ScrollUp,
-        hint: Some("scroll"),
-        visibility: Visibility::Shown,
-        glyph: Some("↑↓"),
-    },
-    KeyBinding {
-        chords: &[
+        RunnerKey::ScrollUp,
+        Some("scroll"),
+        Visibility::Shown,
+        Some("↑↓"),
+    ),
+    KeyBinding::borrowed(
+        &[
             KeyChord::plain(KeyCode::Down),
             KeyChord::plain(KeyCode::Char('j')),
         ],
-        action: RunnerKey::ScrollDown,
-        hint: None,
-        visibility: Visibility::HiddenAlias,
-        glyph: None,
-    },
-    KeyBinding {
-        chords: &[KeyChord::plain(KeyCode::PageUp)],
-        action: RunnerKey::PageUp,
-        hint: None,
-        visibility: Visibility::HiddenAlias,
-        glyph: None,
-    },
-    KeyBinding {
-        chords: &[KeyChord::plain(KeyCode::PageDown)],
-        action: RunnerKey::PageDown,
-        hint: None,
-        visibility: Visibility::HiddenAlias,
-        glyph: None,
-    },
-    KeyBinding {
-        chords: &[KeyChord::plain(KeyCode::End)],
-        action: RunnerKey::FollowTail,
-        hint: Some("follow tail"),
-        visibility: Visibility::Shown,
-        glyph: Some("end"),
-    },
-    KeyBinding {
-        chords: &[
+        RunnerKey::ScrollDown,
+        None,
+        Visibility::HiddenAlias,
+        None,
+    ),
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::PageUp)],
+        RunnerKey::PageUp,
+        None,
+        Visibility::HiddenAlias,
+        None,
+    ),
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::PageDown)],
+        RunnerKey::PageDown,
+        None,
+        Visibility::HiddenAlias,
+        None,
+    ),
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::End)],
+        RunnerKey::FollowTail,
+        Some("follow tail"),
+        Visibility::Shown,
+        Some("end"),
+    ),
+    KeyBinding::borrowed(
+        &[
             KeyChord::plain(KeyCode::Char('q')),
             KeyChord::plain(KeyCode::Esc),
         ],
-        action: RunnerKey::Quit,
-        hint: Some("stop/close"),
-        visibility: Visibility::Shown,
-        glyph: Some("q/esc"),
-    },
-]);
+        RunnerKey::Quit,
+        Some("stop/close"),
+        Visibility::Shown,
+        Some("q/esc"),
+    ),
+];
+static RUNNER_KEYMAP: Keymap<RunnerKey> = Keymap::from_static(RUNNER_BINDINGS);
 
-static DONE_KEYMAP: Keymap<RunnerKey> = Keymap::new(&[KeyBinding {
-    chords: &[
+static DONE_BINDINGS: &[KeyBinding<RunnerKey>] = &[KeyBinding::borrowed(
+    &[
         KeyChord::plain(KeyCode::Char('q')),
         KeyChord::plain(KeyCode::Esc),
     ],
-    action: RunnerKey::Quit,
-    hint: Some("close"),
-    visibility: Visibility::Shown,
-    glyph: Some("q/esc"),
-}]);
+    RunnerKey::Quit,
+    Some("close"),
+    Visibility::Shown,
+    Some("q/esc"),
+)];
+static DONE_KEYMAP: Keymap<RunnerKey> = Keymap::from_static(DONE_BINDINGS);
 
 pub async fn run_tasks(tasks: Vec<TaskDef>) -> anyhow::Result<()> {
     if HEADLESS.load(Ordering::Acquire) {
@@ -319,6 +321,7 @@ async fn run_tasks_headless_inner(tasks: Vec<TaskDef>, parallel: bool, print: bo
 }
 
 fn spawn_tasks(defs: Vec<TaskDef>, parallel: bool, tx: mpsc::Sender<TaskEvent>) -> Vec<TaskHandle> {
+    enable_child_subreaper();
     let process_groups = Arc::new(Mutex::new(vec![None; defs.len()]));
     let cancelled = Arc::new(AtomicBool::new(false));
     let handles = (0..defs.len())
@@ -467,9 +470,46 @@ async fn reap_process_group(pgid: i32) {
         libc::kill(-pgid, libc::SIGKILL);
     }
     while process_group_exists(pgid) {
+        reap_adopted_group_children(pgid);
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    reap_adopted_group_children(pgid);
 }
+
+#[cfg(target_os = "linux")]
+fn enable_child_subreaper() {
+    use std::sync::Once;
+
+    static ENABLE: Once = Once::new();
+    ENABLE.call_once(|| {
+        // SAFETY: PR_SET_CHILD_SUBREAPER changes only this process's child
+        // reparenting policy. It lets the executor adopt and reap orphaned
+        // descendants instead of depending on the host's PID 1 behavior.
+        unsafe {
+            libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
+        }
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn enable_child_subreaper() {}
+
+#[cfg(target_os = "linux")]
+fn reap_adopted_group_children(pgid: i32) {
+    loop {
+        let mut status = 0;
+        // SAFETY: a negative pid restricts waiting to children in this task's
+        // process group; WNOHANG makes the call non-blocking. Adopted children
+        // are ours because holla enabled PR_SET_CHILD_SUBREAPER before spawn.
+        let result = unsafe { libc::waitpid(-pgid, &mut status, libc::WNOHANG) };
+        if result <= 0 {
+            break;
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn reap_adopted_group_children(_pgid: i32) {}
 
 fn process_group_exists(pgid: i32) -> bool {
     // SAFETY: signal 0 performs existence/permission checking only.

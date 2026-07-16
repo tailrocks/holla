@@ -52,29 +52,30 @@ enum FinderKey {
     Quit,
 }
 
-static FINDER_KEYMAP: Keymap<FinderKey> = Keymap::new(&[
-    KeyBinding {
-        chords: &[KeyChord::plain(KeyCode::Up), KeyChord::plain(KeyCode::Down)],
-        action: FinderKey::Navigate,
-        hint: Some("navigate"),
-        visibility: Visibility::Shown,
-        glyph: Some("↑↓"),
-    },
-    KeyBinding {
-        chords: &[KeyChord::plain(KeyCode::Enter)],
-        action: FinderKey::Select,
-        hint: Some("actions"),
-        visibility: Visibility::Shown,
-        glyph: Some("⏎"),
-    },
-    KeyBinding {
-        chords: &[KeyChord::plain(KeyCode::Esc)],
-        action: FinderKey::Quit,
-        hint: Some("clear/quit"),
-        visibility: Visibility::Shown,
-        glyph: Some("esc"),
-    },
-]);
+static FINDER_BINDINGS: &[KeyBinding<FinderKey>] = &[
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::Up), KeyChord::plain(KeyCode::Down)],
+        FinderKey::Navigate,
+        Some("navigate"),
+        Visibility::Shown,
+        Some("↑↓"),
+    ),
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::Enter)],
+        FinderKey::Select,
+        Some("actions"),
+        Visibility::Shown,
+        Some("⏎"),
+    ),
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::Esc)],
+        FinderKey::Quit,
+        Some("clear/quit"),
+        Visibility::Shown,
+        Some("esc"),
+    ),
+];
+static FINDER_KEYMAP: Keymap<FinderKey> = Keymap::from_static(FINDER_BINDINGS);
 
 pub async fn run() -> anyhow::Result<()> {
     let home = dirs::home_dir().context("home directory is unavailable")?;
