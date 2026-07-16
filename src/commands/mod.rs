@@ -1,3 +1,4 @@
+mod cleanup_paths;
 pub mod docker;
 pub mod git;
 pub mod gradle;

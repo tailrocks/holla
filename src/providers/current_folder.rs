@@ -142,7 +142,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
             "idea.clean",
             "idea: clean",
             "Remove .idea dirs and *.iml files",
-            "find . -name .idea -type d ... | rm -rf\nfind . -name '*.iml' ... | rm -f",
+            "Enumerate .idea directories and *.iml files to depth 5, then move them to Trash through holla's validated cleanup core",
             &["cleanup", "jetbrains", "intellij"],
             Danger::Destructive,
             || Box::pin(crate::commands::idea::clean()),

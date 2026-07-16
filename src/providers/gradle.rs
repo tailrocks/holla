@@ -24,7 +24,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
             "gradle.clean-all",
             "gradle: clean all",
             "Stop daemon and clean all build dirs recursively",
-            "$ gradle --stop\n$ find . -name .gradle -exec rm -rf\n$ find . -name build -exec rm -rf",
+            "Stop Gradle, enumerate .gradle/build directories to depth 5, then move them to Trash through holla's validated cleanup core",
             &["cleanup", "build", "cache"],
             Danger::Destructive,
             || Box::pin(crate::commands::gradle::clean()),
