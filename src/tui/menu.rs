@@ -10,7 +10,6 @@ use termrock::{
     interaction::Outcome,
     keymap::{KeyBinding, KeyChord, Keymap, Visibility},
     layout::centered_rect,
-    runtime::{StdSubscription, Subscription, SubscriptionPoll},
     scroll::{DialogScroll, max_line_width},
     style::{Role, Theme},
     widgets::{
@@ -377,7 +376,7 @@ fn needs_confirmation(action: &ActionSpec) -> bool {
 pub async fn run() -> anyhow::Result<()> {
     let theme = Theme::tailrocks_phosphor();
     let mut menu = Menu::default();
-    let mut scans: Option<StdSubscription<ScanEvent>> = None;
+    let mut scans: Option<mpsc::Receiver<ScanEvent>> = None;
     let mut scanning = true;
     let mut search_state = TextInputState::new("").with_allow_empty(true);
     let mut list_state = ListState::new(None::<ActionId>);
@@ -427,20 +426,20 @@ pub async fn run() -> anyhow::Result<()> {
         }
         if let Some(scans) = scans.as_mut() {
             loop {
-                match scans.poll_next() {
-                    SubscriptionPoll::Ready(ScanEvent::Group {
+                match scans.try_recv() {
+                    Ok(ScanEvent::Group {
                         provider_index,
                         provider_id,
                         group,
                     }) => menu.insert_scanned_group(provider_index, provider_id, group),
-                    SubscriptionPoll::Ready(ScanEvent::Warning(warning)) => {
+                    Ok(ScanEvent::Warning(warning)) => {
                         menu.warnings.push(warning);
                     }
-                    SubscriptionPoll::Ready(ScanEvent::Finished) | SubscriptionPoll::Closed => {
+                    Ok(ScanEvent::Finished) | Err(mpsc::TryRecvError::Disconnected) => {
                         scanning = false;
                         break;
                     }
-                    SubscriptionPoll::Pending => break,
+                    Err(mpsc::TryRecvError::Empty) => break,
                 }
             }
         }
@@ -598,7 +597,7 @@ pub async fn run() -> anyhow::Result<()> {
 
         if scans.is_none() {
             // First frame is now visible. Only then may blocking provider work start.
-            scans = Some(StdSubscription(providers::spawn_scans()));
+            scans = Some(providers::spawn_scans());
             if let Some(sender) = history_sender.take() {
                 std::thread::Builder::new()
                     .name("holla-history-load".into())
@@ -850,18 +849,18 @@ mod tests {
     }
 
     #[test]
-    fn compose_logs_action_follows_until_cancelled() {
+    fn compose_logs_action_is_bounded() {
         let mut probe = Probe::empty();
         probe.docker = true;
         probe.has_docker_compose = true;
         let menu = menu(&probe);
         let action = actions(&menu, "Current folder")
             .into_iter()
-            .find(|action| action.label == "compose: logs (follow)")
+            .find(|action| action.label == "compose: logs")
             .expect("compose logs action");
 
-        assert_eq!(action.description, "Follow service logs until cancelled");
-        assert_eq!(action.preview, "$ docker compose logs -f");
+        assert_eq!(action.description, "Show recent service logs");
+        assert_eq!(action.preview, "$ docker compose logs --tail 200");
         assert_eq!(action.danger, Danger::Safe);
     }
 

@@ -11,6 +11,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P3
 - **Effort**: M
 - **Risk**: LOW-MED (cache staleness must be visible, never silently wrong)

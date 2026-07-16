@@ -127,12 +127,12 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
             ),
             shell_action(
                 "compose.logs",
-                "compose: logs (follow)",
-                "Follow service logs until cancelled",
-                "$ docker compose logs -f",
+                "compose: logs",
+                "Show recent service logs",
+                "$ docker compose logs --tail 200",
                 &["docker", "services", "tail"],
                 Danger::Safe,
-                ("docker", &["compose", "logs", "-f"]),
+                ("docker", &["compose", "logs", "--tail", "200"]),
             ),
         ]);
     }

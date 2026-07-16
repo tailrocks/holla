@@ -12,6 +12,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P1
 - **Effort**: S
 - **Risk**: LOW
@@ -185,16 +187,16 @@ None (docs only). Verification via commands above.
 
 ## Done criteria
 
-- [ ] `PRODUCT.md` exists and contains all sections: Mission, Platform scope,
+- [x] `PRODUCT.md` exists and contains all sections: Mission, Platform scope,
       Core concepts, Primary user flows, Safety invariants, References,
       Roadmap.
-- [ ] The GPL "ideas only, never code" rule is present verbatim in the
+- [x] The GPL "ideas only, never code" rule is present verbatim in the
       References section.
-- [ ] `grep -c "Destructive" PRODUCT.md` ≥ 1 (confirmation invariant stated).
-- [ ] `README.md` links to PRODUCT.md; no other README changes
+- [x] `grep -c "Destructive" PRODUCT.md` ≥ 1 (confirmation invariant stated).
+- [x] `README.md` links to PRODUCT.md; no other README changes
       (`git diff README.md` shows exactly one added line).
-- [ ] `cargo build` exits 0.
-- [ ] `plans/README.md` status row updated.
+- [x] `cargo build` exits 0.
+- [x] `plans/README.md` status row updated.
 
 ## STOP conditions
 

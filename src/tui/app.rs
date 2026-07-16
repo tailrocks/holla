@@ -19,7 +19,6 @@ use termrock::{
     interaction::Outcome,
     keymap::{KeyBinding, KeyChord, Keymap, Visibility},
     layout::centered_rect,
-    runtime::{StdSubscription, Subscription, SubscriptionPoll},
     scroll::{DialogScroll, TailScroll},
     style::{Role, Theme},
     widgets::{
@@ -555,7 +554,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
         .collect();
     let (tx, rx) = mpsc::channel();
     let mut supervisor = TaskSupervisor::new(spawn_tasks(task_defs, parallel, tx));
-    let mut events = StdSubscription(rx);
+    let events = rx;
     let theme = Theme::tailrocks_phosphor();
     let mut selected = 0usize;
     let mut tabs_state = TabsState {
@@ -589,7 +588,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     loop {
-        while let SubscriptionPoll::Ready(event) = events.poll_next() {
+        while let Ok(event) = events.try_recv() {
             apply_event(&mut tasks, event);
         }
         let done = all_done(&tasks);

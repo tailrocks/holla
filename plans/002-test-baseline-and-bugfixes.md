@@ -13,6 +13,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P1
 - **Effort**: M
 - **Risk**: LOW
@@ -322,15 +324,15 @@ repo-group gating (2), omz gating (2). Expect ≥12 tests total.
 
 ## Done criteria
 
-- [ ] `cargo nextest run --all-features` exits 0 with ≥12 tests.
-- [ ] `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`,
+- [x] `cargo nextest run --all-features` exits 0 with ≥12 tests.
+- [x] `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`,
       `cargo build` all exit 0.
-- [ ] `grep -rn "parent_git_repos" src/` → no matches.
-- [ ] `grep -rn 'which("omz")' src/` → no matches.
-- [ ] `grep -rn "logs -f" src/` → no matches.
-- [ ] `push_all_remotes` contains no `sh -c` / `format!`-built script.
-- [ ] No files outside the in-scope list modified (`git status`).
-- [ ] `plans/README.md` status row updated.
+- [x] `grep -rn "parent_git_repos" src/` → no matches.
+- [x] `grep -rn 'which("omz")' src/` → no matches.
+- [x] `grep -rn "logs -f" src/` → no matches.
+- [x] `push_all_remotes` contains no `sh -c` / `format!`-built script.
+- [x] No files outside the in-scope list modified (`git status`).
+- [x] `plans/README.md` status row updated.
 
 ## STOP conditions
 

@@ -20,6 +20,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P3
 - **Effort**: L
 - **Risk**: HIGH (destructive surface expands to well-known real user data
@@ -268,19 +270,19 @@ enumerate-then-delete on fixtures, 2+). ≥20 new tests.
 
 ## Done criteria
 
-- [ ] `grep -rn "rm -rf\|exec rm" src/ --include=*.rs` → no production
+- [x] `grep -rn "rm -rf\|exec rm" src/ --include=*.rs` → no production
       matches; ALL deletion routes through `src/cleanup/`.
-- [ ] Every REGISTRY entry has non-empty `explain` and a `Safety`; every id
+- [x] Every REGISTRY entry has non-empty `explain` and a `Safety`; every id
       unique (test-enforced).
-- [ ] Never-touch list enforced by validator tests (iCloud, Keychains,
+- [x] Never-touch list enforced by validator tests (iCloud, Keychains,
       ~/.Trash, bare Application Support).
-- [ ] ReviewFirst rows never preselected; too-recent rows disabled not
+- [x] ReviewFirst rows never preselected; too-recent rows disabled not
       hidden (UI code + manual smoke).
-- [ ] `skip_if_running` produces `skipped` outcomes, not failures (test
+- [x] `skip_if_running` produces `skipped` outcomes, not failures (test
       against the test runner's own process name for a deterministic
       positive, via whichever detection mechanism shipped).
-- [ ] Four gates exit 0; ≥20 new tests; smoke recorded.
-- [ ] `plans/README.md` status row updated.
+- [x] Four gates exit 0; ≥20 new tests; smoke recorded.
+- [x] `plans/README.md` status row updated.
 
 ## STOP conditions
 

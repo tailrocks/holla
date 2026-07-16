@@ -13,6 +13,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P2
 - **Effort**: L
 - **Risk**: HIGH (this plan introduces deletion of user files — every
@@ -258,18 +260,18 @@ skips `validate`; (3) confirm dialog cannot default-activate Delete
 
 ## Done criteria
 
-- [ ] Deletion exists ONLY in `src/cleanup/` (grep above) and every path
+- [x] Deletion exists ONLY in `src/cleanup/` (grep above) and every path
       goes through `validate`.
-- [ ] Trash is the default mode; permanent requires the explicit in-dialog
+- [x] Trash is the default mode; permanent requires the explicit in-dialog
       toggle; dry-run short-circuits inside `execute`.
-- [ ] Confirm dialog: Cancel focused by default; Esc cancels; body shows
+- [x] Confirm dialog: Cancel focused by default; Esc cancels; body shows
       item count + reclaimable bytes.
-- [ ] Analyzer streams progressively and cancels cleanly (manual smoke
+- [x] Analyzer streams progressively and cancels cleanly (manual smoke
       recorded).
-- [ ] `~/.cache/holla/ops.log` records every outcome in the smoke run.
-- [ ] All four gates exit 0; new tests ≥ 45 total across cleanup/selection/
+- [x] `~/.cache/holla/ops.log` records every outcome in the smoke run.
+- [x] All four gates exit 0; new tests ≥ 45 total across cleanup/selection/
       projection.
-- [ ] `plans/README.md` status row updated (include termrock re-pin SHA).
+- [x] `plans/README.md` status row updated (include termrock re-pin SHA).
 
 ## STOP conditions
 

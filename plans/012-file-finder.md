@@ -11,6 +11,7 @@
 
 ## Status
 
+- **State**: DONE
 - **Completed**: 2026-07-17
 - **Priority**: P3
 - **Effort**: L
@@ -214,6 +215,10 @@ registration (1), highlight projection (2). UI: manual smoke per policy.
   publishes no migration guide. The release adds public watcher subscriptions;
   Holla keeps `watch = false`, and its existing picker/search API is unchanged.
   Repin accepted only after finder tests and the full project gates passed.
+- 2026-07-17: `31be2242234df9eb44851f3a59bf007e96986a44` →
+  `b14c31d137e108b7c520d0d9e0b0017a1a88141d`. The delta changes only FFF MCP
+  release artifacts; Holla's linked crates are source-identical. Mac and pinned
+  Debian gates passed before the repin was accepted.
 
 ## STOP conditions
 

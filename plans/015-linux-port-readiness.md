@@ -12,6 +12,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P3 (mission-committed, timing flexible)
 - **Effort**: L (audit S + design M + bootable slice M)
 - **Risk**: LOW (read-mostly; the slice touches cfg boundaries only)
@@ -146,13 +148,13 @@ each with S/M/L estimate — candidates for future `plans/0xx` files.
 
 ## Done criteria
 
-- [ ] `docs/linux-port.md` answers all 6 design questions with sources and
+- [x] `docs/linux-port.md` answers all 6 design questions with sources and
       contains the provider matrix + sequenced follow-up list.
-- [ ] holla builds AND was manually exercised on Linux (record image/
+- [x] holla builds AND was manually exercised on Linux (record image/
       distro); launcher + runner + a fixture disk scan verified.
-- [ ] macOS-only surface is cfg-hidden, not broken, on Linux (test).
-- [ ] No feature regressions on macOS (full gates green).
-- [ ] `plans/README.md` row updated.
+- [x] macOS-only surface is cfg-hidden, not broken, on Linux (test).
+- [x] No feature regressions on macOS (full gates green).
+- [x] `plans/README.md` row updated.
 
 ## STOP conditions
 

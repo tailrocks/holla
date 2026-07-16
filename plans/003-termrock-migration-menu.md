@@ -13,6 +13,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P1
 - **Effort**: L
 - **Risk**: MED (full UI-layer replacement; characterization tests from 002
@@ -331,17 +333,17 @@ repo (git actions present), (c) resize the terminal while open (no panic).
 
 ## Done criteria
 
-- [ ] `Cargo.toml` pins termrock by full git rev with `features = ["crossterm"]`.
-- [ ] `grep -n "enable_raw_mode\|EnterAlternateScreen" src/tui/menu.rs` → no
+- [x] `Cargo.toml` pins termrock by full git rev with `features = ["crossterm"]`.
+- [x] `grep -n "enable_raw_mode\|EnterAlternateScreen" src/tui/menu.rs` → no
       matches (Session owns lifecycle).
-- [ ] `grep -n "Color::Cyan\|Color::DarkGray" src/tui/menu.rs` → no matches
+- [x] `grep -n "Color::Cyan\|Color::DarkGray" src/tui/menu.rs` → no matches
       (theme roles only).
-- [ ] `grep -c "termrock::" src/tui/menu.rs` ≥ 5.
-- [ ] All four gate commands exit 0; 002 tests + new `menu_rows` test pass.
-- [ ] Manual smoke checklist from Step 6 done (record results in the status
+- [x] `grep -c "termrock::" src/tui/menu.rs` ≥ 5.
+- [x] All four gate commands exit 0; 002 tests + new `menu_rows` test pass.
+- [x] Manual smoke checklist from Step 6 done (record results in the status
       row note).
-- [ ] `src/tui/app.rs` untouched (`git diff --stat` confirms).
-- [ ] `plans/README.md` status row updated.
+- [x] `src/tui/app.rs` untouched (`git diff --stat` confirms).
+- [x] `plans/README.md` status row updated.
 
 ## STOP conditions
 

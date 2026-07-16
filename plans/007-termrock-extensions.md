@@ -18,6 +18,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P2
 - **Effort**: L
 - **Risk**: MED (public-API design in a shared library; forward-only policy
@@ -255,16 +257,16 @@ Lookbook deterministic previews are themselves regression tests
 
 ## Done criteria
 
-- [ ] All four capabilities merged on termrock `main` (or LogPane formally
+- [x] All four capabilities merged on termrock `main` (or LogPane formally
       downgraded to a documented composition) with the full 6-command gate
       green.
-- [ ] Breaking changes each have a numbered migration file + MIGRATING.md
+- [x] Breaking changes each have a numbered migration file + MIGRATING.md
       index row in the same commit.
-- [ ] Every new/changed widget has: story, interactor, deterministic
+- [x] Every new/changed widget has: story, interactor, deterministic
       preview, components.mdx contract line.
-- [ ] No product wording ("holla", "disk", "task") in any termrock API —
+- [x] No product wording ("holla", "disk", "task") in any termrock API —
       names stay domain-neutral (Selection, trailing, Progress, LogPane).
-- [ ] New termrock SHA recorded in holla `plans/README.md` status note.
+- [x] New termrock SHA recorded in holla `plans/README.md` status note.
 
 ## STOP conditions
 

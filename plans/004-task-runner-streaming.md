@@ -12,6 +12,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P1
 - **Effort**: L
 - **Risk**: MED (process management + concurrent UI; wrong teardown can leak
@@ -262,15 +264,15 @@ restores the session, mirroring Session::Drop.
 
 ## Done criteria
 
-- [ ] `grep -n "output().await" src/tui/app.rs` → no matches (streaming only).
-- [ ] `run_tasks` / `run_parallel_tasks` signatures unchanged
+- [x] `grep -n "output().await" src/tui/app.rs` → no matches (streaming only).
+- [x] `run_tasks` / `run_parallel_tasks` signatures unchanged
       (`grep -rn "run_tasks\|run_parallel_tasks" src/commands/ src/tui/menu.rs`
       compiles without call-site edits beyond imports).
-- [ ] Sequential runs render before completion (executor test proves
+- [x] Sequential runs render before completion (executor test proves
       ordering; smoke (b) proves rendering).
-- [ ] Cancellation kills children — smoke (c) recorded in status row note.
-- [ ] All four gate commands exit 0; new tests ≥ 6.
-- [ ] `plans/README.md` status row updated.
+- [x] Cancellation kills children — smoke (c) recorded in status row note.
+- [x] All four gate commands exit 0; new tests ≥ 6.
+- [x] `plans/README.md` status row updated.
 
 ## STOP conditions
 

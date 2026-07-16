@@ -3,7 +3,6 @@ use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
     io,
-    os::fd::AsRawFd,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -167,10 +166,7 @@ impl SizeCache {
             .read(true)
             .write(true)
             .open(path.with_extension("lock"))?;
-        // SAFETY: flock only operates on this valid, owned file descriptor.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        lock.lock()?;
 
         let mut merged = Self::load_from(path);
         let now = SystemTime::now();

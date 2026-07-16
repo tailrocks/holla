@@ -10,6 +10,7 @@
 
 ## Status
 
+- **State**: DONE
 - **Completed**: 2026-07-17
 - **Priority**: P3
 - **Effort**: M

@@ -190,7 +190,10 @@ mod tests {
 
     #[tokio::test]
     async fn slow_command_times_out_as_unavailable() {
-        let args = [OsStr::new("-c"), OsStr::new("sleep 1")];
+        // `exec` makes the timed-out process the sleep process itself, so
+        // kill-on-drop cannot leave a shell child behind. The long duration
+        // also keeps scheduler delays from racing normal process completion.
+        let args = [OsStr::new("-c"), OsStr::new("exec sleep 60")];
         let result = discover_with("/bin/sh", &args, Duration::from_millis(20)).await;
         assert_eq!(result, TopFiles::Unavailable);
     }

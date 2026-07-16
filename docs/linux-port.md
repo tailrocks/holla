@@ -1,6 +1,6 @@
 # Linux port readiness
 
-Status: design complete; first runtime slice targets Debian 12 on `linux/amd64`.
+Status: design and first Debian runtime slice complete on `linux/amd64`.
 Plans 005, 006, and 008 were complete before this audit.
 
 ## Decisions
@@ -90,7 +90,7 @@ Debian packages remain `amd64` and `arm64`; CI and release jobs use fixed runner
 labels, never `*-latest`. Holla inherits TermRock's Linux/macOS, UTF-8, modern-VT,
 truecolor baseline. There is intentionally no reduced-color or `NO_COLOR` mode.
 OSC 8/22/52 capabilities remain optional
-([TermRock README at the pinned revision](https://github.com/tailrocks/termrock/blob/1ebac0147d160bff02cec805954537fb02d52d31/README.md)).
+([TermRock README at the pinned revision](https://github.com/tailrocks/termrock/blob/371ff94effaf3363c9671a7f53b0dc606f796b67/README.md)).
 
 ## Module audit
 

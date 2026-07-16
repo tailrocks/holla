@@ -13,6 +13,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P1
 - **Effort**: L
 - **Risk**: MED
@@ -297,14 +299,14 @@ regression check).
 
 ## Done criteria
 
-- [ ] `grep -rn "Menu::build" src/` → no matches; providers own content.
-- [ ] `grep -n "Probe::run()" src/main.rs` → no match before terminal
+- [x] `grep -rn "Menu::build" src/` → no matches; providers own content.
+- [x] `grep -n "Probe::run()" src/main.rs` → no match before terminal
       setup (no blocking scan pre-paint).
-- [ ] Every `ActionSpec` has a stable `id`; `grep -rn 'id: ""' src/` → none.
-- [ ] `docker.clean-all` is `Danger::Destructive` and test-protected.
-- [ ] All four gates exit 0; total test count ≥ 30.
-- [ ] Manual smoke checklist recorded in the status row note.
-- [ ] `plans/README.md` status row updated.
+- [x] Every `ActionSpec` has a stable `id`; `grep -rn 'id: ""' src/` → none.
+- [x] `docker.clean-all` is `Danger::Destructive` and test-protected.
+- [x] All four gates exit 0; total test count ≥ 30.
+- [x] Manual smoke checklist recorded in the status row note.
+- [x] `plans/README.md` status row updated.
 
 ## STOP conditions
 

@@ -11,6 +11,8 @@
 
 ## Status
 
+- **State**: DONE
+- **Completed**: 2026-07-17
 - **Priority**: P2
 - **Effort**: L
 - **Risk**: MED (filesystem semantics; wrong size math destroys user trust;
@@ -285,16 +287,16 @@ after `src/probe.rs` test module (002).
 
 ## Done criteria
 
-- [ ] `grep -rn "termrock\|ratatui" src/du/` → no matches.
-- [ ] `grep -rn "unsafe" src/du/ | grep -v platform.rs` → no matches;
+- [x] `grep -rn "termrock\|ratatui" src/du/` → no matches.
+- [x] `grep -rn "unsafe" src/du/ | grep -v platform.rs` → no matches;
       every unsafe in platform.rs has a `// SAFETY:` comment.
-- [ ] Engine scan of a fixture tree matches known totals exactly;
+- [x] Engine scan of a fixture tree matches known totals exactly;
       `~/Library/Caches` smoke within ~5% of `du -sk`.
-- [ ] Cancellation returns promptly (test-proven).
-- [ ] All four gates exit 0 (fmt, clippy, nextest, build).
-- [ ] No UI plan blocked on API questions: `ScanHandle`
+- [x] Cancellation returns promptly (test-proven).
+- [x] All four gates exit 0 (fmt, clippy, nextest, build).
+- [x] No UI plan blocked on API questions: `ScanHandle`
       {events, cancel, tree} is exactly as specified (008 codes against it).
-- [ ] `plans/README.md` status row updated.
+- [x] `plans/README.md` status row updated.
 
 ## STOP conditions
 
