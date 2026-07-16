@@ -1,7 +1,7 @@
 use crate::{
     model::{ActionSpec, Danger, GroupSpec},
     probe::Probe,
-    providers::{Provider, run_shell},
+    providers::{Provider, run_argv},
 };
 
 pub struct CurrentFolderProvider;
@@ -50,7 +50,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
                 "$ git pull",
                 &["repository", "sync"],
                 Danger::Mutating,
-                "git pull",
+                ("git", &["pull"]),
             ),
             shell_action(
                 "git.push",
@@ -59,7 +59,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
                 "$ git push",
                 &["repository", "publish"],
                 Danger::Mutating,
-                "git push",
+                ("git", &["push"]),
             ),
             shell_action(
                 "git.status",
@@ -68,7 +68,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
                 "$ git status",
                 &["repository", "inspect"],
                 Danger::Safe,
-                "git status",
+                ("git", &["status"]),
             ),
         ]);
     }
@@ -82,7 +82,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
                 "$ gradle clean",
                 &["cleanup", "build"],
                 Danger::Mutating,
-                "gradle clean",
+                ("gradle", &["clean"]),
             ),
             shell_action(
                 "gradle.build",
@@ -91,7 +91,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
                 "$ gradle build",
                 &["compile"],
                 Danger::Mutating,
-                "gradle build",
+                ("gradle", &["build"]),
             ),
             shell_action(
                 "gradle.test",
@@ -100,7 +100,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
                 "$ gradle test",
                 &["verify"],
                 Danger::Mutating,
-                "gradle test",
+                ("gradle", &["test"]),
             ),
         ]);
     }
@@ -114,7 +114,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
                 "$ docker compose up -d",
                 &["docker", "services", "start"],
                 Danger::Mutating,
-                "docker compose up -d",
+                ("docker", &["compose", "up", "-d"]),
             ),
             shell_action(
                 "compose.down",
@@ -123,7 +123,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
                 "$ docker compose down",
                 &["docker", "services", "stop"],
                 Danger::Mutating,
-                "docker compose down",
+                ("docker", &["compose", "down"]),
             ),
             shell_action(
                 "compose.logs",
@@ -132,7 +132,7 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
                 "$ docker compose logs -f",
                 &["docker", "services", "tail"],
                 Danger::Safe,
-                "docker compose logs -f",
+                ("docker", &["compose", "logs", "-f"]),
             ),
         ]);
     }
@@ -163,8 +163,9 @@ fn shell_action(
     preview: &'static str,
     keywords: &'static [&'static str],
     danger: Danger,
-    command: &'static str,
+    command: (&'static str, &'static [&'static str]),
 ) -> ActionSpec {
+    let (program, args) = command;
     ActionSpec::new(
         id,
         label,
@@ -172,6 +173,11 @@ fn shell_action(
         preview,
         keywords,
         danger,
-        move || Box::pin(run_shell(command)),
+        move || {
+            Box::pin(run_argv(
+                program.to_owned(),
+                args.iter().map(|arg| (*arg).to_owned()).collect(),
+            ))
+        },
     )
 }

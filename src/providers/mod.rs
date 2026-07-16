@@ -4,6 +4,7 @@ mod docker;
 mod find;
 mod gradle;
 mod insights;
+mod node_scripts;
 mod repos;
 mod system;
 mod user;
@@ -23,6 +24,7 @@ pub fn all_providers() -> Vec<Box<dyn Provider>> {
         Box::new(find::FindProvider),
         Box::new(disk::DiskProvider),
         Box::new(current_folder::CurrentFolderProvider),
+        Box::new(node_scripts::NodeScriptsProvider),
         Box::new(repos::ReposProvider),
         Box::new(system::SystemProvider),
         Box::new(docker::DockerProvider),
@@ -133,12 +135,15 @@ pub fn groups_from_probe(probe: &Probe) -> Vec<GroupSpec> {
     .collect()
 }
 
-pub(crate) async fn run_shell(command: &str) -> anyhow::Result<()> {
+pub(crate) async fn run_argv(program: String, args: Vec<String>) -> anyhow::Result<()> {
     use crate::tui::{TaskDef, run_tasks};
     run_tasks(vec![TaskDef {
-        label: command.to_owned(),
-        program: "sh".into(),
-        args: vec!["-c".into(), command.to_owned()],
+        label: std::iter::once(program.as_str())
+            .chain(args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" "),
+        program,
+        args,
         working_directory: None,
     }])
     .await
