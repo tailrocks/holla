@@ -167,10 +167,38 @@ fn cache_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{ffi::OsString, sync::Mutex};
     use tempfile::tempdir;
 
     const DAY: u64 = 86_400;
     const NOW: u64 = 2_000_000_000;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvRestore {
+        key: &'static str,
+        old: Option<OsString>,
+    }
+
+    impl EnvRestore {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let old = std::env::var_os(key);
+            // SAFETY: these tests serialize all mutation of the variables they touch.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            // SAFETY: the matching test still holds ENV_LOCK while guards are dropped.
+            unsafe {
+                match &self.old {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn recent_use_scores_above_old_use() {
@@ -244,5 +272,20 @@ mod tests {
         assert!(json["actions"].get("stale").is_none());
         assert!(json["queries"].get("keep").is_some());
         assert!(json["queries"].get("drop").is_none());
+    }
+
+    #[test]
+    fn no_history_environment_switch_creates_no_file() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let temp = tempdir().unwrap();
+        let _cache = EnvRestore::set("XDG_CACHE_HOME", temp.path());
+        let _disabled = EnvRestore::set("HOLLA_NO_HISTORY", Path::new("1"));
+        let path = temp.path().join("holla/frecency.json");
+        let mut store = FrecencyStore::load();
+        store.record("action", "query", NOW);
+
+        store.save(NOW).unwrap();
+
+        assert!(!path.exists());
     }
 }

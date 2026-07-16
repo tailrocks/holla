@@ -22,9 +22,10 @@ use termrock::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
+    frecency::{FrecencyStore, now_epoch_secs},
     model::{ActionSpec, Danger, GroupSpec},
     providers::{self, ScanEvent},
-    search::{SearchHit, search},
+    search::{SearchHit, search_with_history},
 };
 
 type ActionId = String;
@@ -128,10 +129,65 @@ static MENU_KEYMAP: Keymap<MenuKey> = Keymap::new(&[
     },
 ]);
 
+#[cfg(test)]
 fn menu_rows(menu: &Menu, query: &str, theme: &Theme) -> Vec<ListRow<'static, ActionId>> {
+    menu_rows_with_history(menu, query, theme, &FrecencyStore::default(), 0)
+}
+
+fn menu_rows_with_history(
+    menu: &Menu,
+    query: &str,
+    theme: &Theme,
+    history: &FrecencyStore,
+    now: u64,
+) -> Vec<ListRow<'static, ActionId>> {
     let query = query.trim();
     if query.is_empty() {
         let mut rows = Vec::new();
+        let mut recent = menu
+            .groups
+            .iter()
+            .enumerate()
+            .flat_map(|(group_index, group)| {
+                group
+                    .actions
+                    .iter()
+                    .enumerate()
+                    .map(move |(action_index, action)| {
+                        (
+                            action,
+                            history.score(&action.id, now),
+                            group_index,
+                            action_index,
+                        )
+                    })
+            })
+            .filter(|(_, score, _, _)| *score > 0.05)
+            .collect::<Vec<_>>();
+        recent.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.3.cmp(&right.3))
+        });
+        recent.truncate(5);
+        if !recent.is_empty() {
+            rows.push(ListRow {
+                id: "separator:recent".to_owned(),
+                label: Line::styled("Recent", theme.style(Role::TextMuted)),
+                trailing: None,
+                role: RowRole::Separator,
+                enabled: false,
+            });
+            rows.extend(recent.into_iter().map(|(action, _, _, _)| ListRow {
+                id: action.id.clone(),
+                label: Line::raw(action.label.clone()),
+                trailing: None,
+                role: RowRole::Item,
+                enabled: true,
+            }));
+        }
         let mut previous_group = None;
         for group in &menu.groups {
             if previous_group != Some(group.id) {
@@ -155,7 +211,7 @@ fn menu_rows(menu: &Menu, query: &str, theme: &Theme) -> Vec<ListRow<'static, Ac
         return rows;
     }
 
-    search(&menu.groups, query)
+    search_with_history(&menu.groups, query, history, now)
         .into_iter()
         .map(|hit| {
             let group = &menu.groups[hit.group];
@@ -289,6 +345,7 @@ pub async fn run() -> anyhow::Result<()> {
     let mut preview_focused = false;
     let mut status_state = StatusBarState::default();
     let mut pending_confirm: Option<PendingConfirm> = None;
+    let mut history = FrecencyStore::load();
     let cwd = std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
@@ -332,7 +389,13 @@ pub async fn run() -> anyhow::Result<()> {
             }
         }
 
-        let rows = menu_rows(&menu, search_state.value(), &theme);
+        let rows = menu_rows_with_history(
+            &menu,
+            search_state.value(),
+            &theme,
+            &history,
+            now_epoch_secs(),
+        );
         if !rows
             .iter()
             .any(|row| row.enabled && list_state.selected.as_ref().is_some_and(|id| id == &row.id))
@@ -565,7 +628,16 @@ pub async fn run() -> anyhow::Result<()> {
     if let Some(id) = selected_action
         && let Some(action) = menu.action(&id)
     {
-        (action.run)().await?;
+        let now = now_epoch_secs();
+        history.record(&id, search_state.value(), now);
+        let save = tokio::task::spawn_blocking(move || history.save(now));
+        let action_result = (action.run)().await;
+        match save.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => eprintln!("holla: could not save action history: {error}"),
+            Err(error) => eprintln!("holla: action history task failed: {error}"),
+        }
+        action_result?;
     }
     Ok(())
 }
@@ -847,6 +919,48 @@ mod tests {
                 .filter(|row| row.role == RowRole::Separator)
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn recent_projection_precedes_normal_groups_and_keeps_normal_action() {
+        let menu = Menu::from_groups(vec![GroupSpec {
+            id: "first",
+            title: "First".into(),
+            actions: vec![test_action("one", "one", Danger::Safe)],
+        }]);
+        let mut history = FrecencyStore::default();
+        history.record("one", "", 100);
+
+        let rows = menu_rows_with_history(&menu, "", &Theme::default(), &history, 100);
+
+        assert_eq!(rows[0].id, "separator:recent");
+        assert_eq!(rows[1].id, "one");
+        assert_eq!(rows[2].id, "separator:first");
+        assert_eq!(rows[3].id, "one");
+    }
+
+    #[test]
+    fn recent_projection_is_limited_to_five_actions() {
+        let menu = Menu::from_groups(vec![GroupSpec {
+            id: "first",
+            title: "First".into(),
+            actions: (0..6)
+                .map(|index| test_action(&format!("action-{index}"), "action", Danger::Safe))
+                .collect(),
+        }]);
+        let mut history = FrecencyStore::default();
+        for index in 0..6 {
+            history.record(&format!("action-{index}"), "", 100 + index);
+        }
+
+        let rows = menu_rows_with_history(&menu, "", &Theme::default(), &history, 106);
+
+        assert_eq!(
+            rows.iter()
+                .take_while(|row| row.id != "separator:first")
+                .count(),
+            6
         );
     }
 

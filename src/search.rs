@@ -1,4 +1,4 @@
-use crate::model::GroupSpec;
+use crate::{frecency::FrecencyStore, model::GroupSpec};
 use nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
@@ -48,6 +48,43 @@ pub fn search(groups: &[GroupSpec], query: &str) -> Vec<SearchHit> {
             .then_with(|| left.action.cmp(&right.action))
     });
     hits
+}
+
+pub fn search_with_history(
+    groups: &[GroupSpec],
+    query: &str,
+    history: &FrecencyStore,
+    now: u64,
+) -> Vec<SearchHit> {
+    let mut hits = search(groups, query);
+    let remembered = history.remembered_action(query);
+    hits.sort_by(|left, right| {
+        let left_action = &groups[left.group].actions[left.action];
+        let right_action = &groups[right.group].actions[right.action];
+        let left_rank = history_rank(
+            left.score,
+            history.score(&left_action.id, now),
+            remembered == Some(left_action.id.as_str()),
+        );
+        let right_rank = history_rank(
+            right.score,
+            history.score(&right_action.id, now),
+            remembered == Some(right_action.id.as_str()),
+        );
+        right_rank
+            .total_cmp(&left_rank)
+            .then_with(|| right.score.cmp(&left.score))
+            .then_with(|| left.group.cmp(&right.group))
+            .then_with(|| left.action.cmp(&right.action))
+    });
+    hits
+}
+
+fn history_rank(base: u32, frecency: f64, remembered: bool) -> f64 {
+    let base = f64::from(base);
+    let frecency_boost = base * frecency.clamp(0.0, 100.0) / 100.0 * 0.25;
+    let query_boost = if remembered { base * 0.26 } else { 0.0 };
+    base + frecency_boost + query_boost
 }
 
 fn haystack(group: &GroupSpec, action_index: usize) -> String {
@@ -140,6 +177,42 @@ mod tests {
                 label_start as u32 + 9,
                 label_start as u32 + 10
             ]
+        );
+    }
+
+    #[test]
+    fn empty_history_keeps_original_ranking() {
+        let groups = fixtures();
+        assert_eq!(
+            search_with_history(&groups, "cleanup", &FrecencyStore::default(), 100),
+            search(&groups, "cleanup")
+        );
+    }
+
+    #[test]
+    fn frecency_boost_is_capped_at_twenty_five_percent() {
+        assert_eq!(history_rank(100, 10_000.0, false), 125.0);
+    }
+
+    #[test]
+    fn negative_frecency_never_reduces_text_score() {
+        assert_eq!(history_rank(100, -1.0, false), 100.0);
+    }
+
+    #[test]
+    fn remembered_query_wins_equal_text_and_max_frecency() {
+        let groups = fixtures();
+        let mut history = FrecencyStore::default();
+        for timestamp in 80..100 {
+            history.record("gradle.clean", "", timestamp);
+        }
+        history.record("docker.stop", "cleanup", 1);
+
+        let hits = search_with_history(&groups, "cleanup", &history, 100);
+
+        assert_eq!(
+            groups[hits[0].group].actions[hits[0].action].id,
+            "docker.stop"
         );
     }
 }
