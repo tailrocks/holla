@@ -28,7 +28,11 @@ use crate::{
     search::{SearchHit, search_with_history},
 };
 
-type ActionId = String;
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ActionId {
+    Separator(String),
+    Action { id: String, recent: bool },
+}
 
 #[derive(Default)]
 pub struct Menu {
@@ -63,11 +67,17 @@ impl Menu {
     }
 
     fn action(&self, id: &str) -> Option<&ActionSpec> {
-        let id = id.strip_prefix("recent:").unwrap_or(id);
         self.groups
             .iter()
             .flat_map(|group| &group.actions)
             .find(|action| action.id == id)
+    }
+
+    fn row_action(&self, row: &ActionId) -> Option<&ActionSpec> {
+        match row {
+            ActionId::Action { id, .. } => self.action(id),
+            ActionId::Separator(_) => None,
+        }
     }
 }
 
@@ -175,14 +185,17 @@ fn menu_rows_with_history(
         recent.truncate(5);
         if !recent.is_empty() {
             rows.push(ListRow {
-                id: "separator:recent".to_owned(),
+                id: ActionId::Separator("recent".to_owned()),
                 label: Line::styled("Recent", theme.style(Role::TextMuted)),
                 trailing: None,
                 role: RowRole::Separator,
                 enabled: false,
             });
             rows.extend(recent.into_iter().map(|(action, _, _, _)| ListRow {
-                id: format!("recent:{}", action.id),
+                id: ActionId::Action {
+                    id: action.id.clone(),
+                    recent: true,
+                },
                 label: Line::raw(action.label.clone()),
                 trailing: None,
                 role: RowRole::Item,
@@ -193,7 +206,7 @@ fn menu_rows_with_history(
         for group in &menu.groups {
             if previous_group != Some(group.id) {
                 rows.push(ListRow {
-                    id: format!("separator:{}", group.id),
+                    id: ActionId::Separator(group.id.to_owned()),
                     label: Line::styled(group.title.clone(), theme.style(Role::TextMuted)),
                     trailing: None,
                     role: RowRole::Separator,
@@ -202,7 +215,10 @@ fn menu_rows_with_history(
                 previous_group = Some(group.id);
             }
             rows.extend(group.actions.iter().map(|action| ListRow {
-                id: action.id.clone(),
+                id: ActionId::Action {
+                    id: action.id.clone(),
+                    recent: false,
+                },
                 label: Line::raw(action.label.clone()),
                 trailing: None,
                 role: RowRole::Item,
@@ -218,7 +234,10 @@ fn menu_rows_with_history(
             let group = &menu.groups[hit.group];
             let action = &group.actions[hit.action];
             ListRow {
-                id: action.id.clone(),
+                id: ActionId::Action {
+                    id: action.id.clone(),
+                    recent: false,
+                },
                 label: highlighted_hit(group, &hit, theme),
                 trailing: None,
                 role: RowRole::Item,
@@ -304,8 +323,8 @@ fn push_highlighted(
     }));
 }
 
-fn preview_lines(menu: &Menu, selected: Option<&str>, theme: &Theme) -> Vec<Line<'static>> {
-    let Some(action) = selected.and_then(|id| menu.action(id)) else {
+fn preview_lines(menu: &Menu, selected: Option<&ActionId>, theme: &Theme) -> Vec<Line<'static>> {
+    let Some(action) = selected.and_then(|id| menu.row_action(id)) else {
         return vec![Line::styled(
             if menu.groups.is_empty() {
                 "Scanning providers…"
@@ -341,7 +360,7 @@ pub async fn run() -> anyhow::Result<()> {
     let mut scans: Option<StdSubscription<ScanEvent>> = None;
     let mut scanning = true;
     let mut search_state = TextInputState::new("").with_allow_empty(true);
-    let mut list_state = ListState::new(None::<String>);
+    let mut list_state = ListState::new(None::<ActionId>);
     let mut preview_scroll = DialogScroll::new();
     let mut preview_focused = false;
     let mut status_state = StatusBarState::default();
@@ -421,7 +440,7 @@ pub async fn run() -> anyhow::Result<()> {
             );
         }
         list_state.focused = !preview_focused;
-        let preview = preview_lines(&menu, list_state.selected.as_deref(), &theme);
+        let preview = preview_lines(&menu, list_state.selected.as_ref(), &theme);
         let preview_width = max_line_width(&preview);
         let mut preview_viewport = (0usize, 0usize);
 
@@ -618,7 +637,7 @@ pub async fn run() -> anyhow::Result<()> {
 
             match list_state.handle_key(&rows, key) {
                 Outcome::Activated(id) => {
-                    if let Some(action) = menu.action(&id) {
+                    if let Some(action) = menu.row_action(&id) {
                         let action_id = action.id.clone();
                         if needs_confirmation(action) {
                             pending_confirm = Some(PendingConfirm {
@@ -879,6 +898,14 @@ mod tests {
             .any(|span| span.style == theme.style(Role::Accent))
     }
 
+    fn row_id(id: &ActionId) -> String {
+        match id {
+            ActionId::Separator(id) => format!("separator:{id}"),
+            ActionId::Action { id, recent: true } => format!("recent:{id}"),
+            ActionId::Action { id, recent: false } => id.clone(),
+        }
+    }
+
     #[test]
     fn menu_rows_flatten_groups_and_actions_with_stable_ids() {
         let menu = Menu::from_groups(vec![
@@ -904,10 +931,10 @@ mod tests {
         assert_eq!(rows.len(), 6);
         assert_eq!(rows[0].role, RowRole::Separator);
         assert!(!rows[0].enabled);
-        assert_eq!(rows[1].id, "one");
+        assert_eq!(row_id(&rows[1].id), "one");
         assert_eq!(rows[1].role, RowRole::Item);
         assert!(rows[1].enabled);
-        assert_eq!(rows[5].id, "four");
+        assert_eq!(row_id(&rows[5].id), "four");
     }
 
     #[test]
@@ -922,7 +949,7 @@ mod tests {
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].role, RowRole::Separator);
-        assert_eq!(rows[1].id, "one");
+        assert_eq!(row_id(&rows[1].id), "one");
     }
 
     #[test]
@@ -962,12 +989,12 @@ mod tests {
 
         let rows = menu_rows_with_history(&menu, "", &Theme::default(), &history, 100);
 
-        assert_eq!(rows[0].id, "separator:recent");
-        assert_eq!(rows[1].id, "recent:one");
-        assert_eq!(rows[2].id, "separator:first");
-        assert_eq!(rows[3].id, "one");
+        assert_eq!(row_id(&rows[0].id), "separator:recent");
+        assert_eq!(row_id(&rows[1].id), "recent:one");
+        assert_eq!(row_id(&rows[2].id), "separator:first");
+        assert_eq!(row_id(&rows[3].id), "one");
         assert_ne!(rows[1].id, rows[3].id);
-        assert_eq!(menu.action(&rows[1].id).unwrap().id, "one");
+        assert_eq!(menu.row_action(&rows[1].id).unwrap().id, "one");
     }
 
     #[test]
@@ -988,7 +1015,7 @@ mod tests {
 
         assert_eq!(
             rows.iter()
-                .take_while(|row| row.id != "separator:first")
+                .take_while(|row| row_id(&row.id) != "separator:first")
                 .count(),
             6
         );
