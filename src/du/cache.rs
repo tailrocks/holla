@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    fs, io,
+    fs::{self, OpenOptions},
+    io,
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -18,6 +20,12 @@ pub struct CachedSize {
     pub entry_count: u64,
     pub scanned_at: u64,
     pub root_mtime: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct SizeSnapshot {
+    scanned_at: u64,
+    entries: Vec<(PathBuf, u64, u64, u64)>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -70,6 +78,9 @@ impl SizeCache {
     }
 
     pub fn valid_below(&self, root: &Path, now: SystemTime) -> Vec<(PathBuf, CachedSize)> {
+        if self.valid(root, now).is_none() {
+            return Vec::new();
+        }
         let mut entries = self
             .entries
             .iter()
@@ -85,22 +96,21 @@ impl SizeCache {
     }
 
     pub fn capture(&mut self, root: &Path, tree: &ScanTree, scanned_at: SystemTime) {
-        let scanned_at = epoch_secs(scanned_at);
-        for (index, node) in tree.nodes().iter().enumerate() {
-            let id = NodeId(u32::try_from(index).expect("scan tree exceeded u32 nodes"));
-            if node_depth(tree, id) > 2 {
-                continue;
-            }
-            let path = node_path(tree, root, id);
+        self.capture_snapshot(snapshot(root, tree, scanned_at));
+    }
+
+    pub fn capture_snapshot(&mut self, snapshot: SizeSnapshot) {
+        let scanned_at = snapshot.scanned_at;
+        for (path, on_disk, apparent, entry_count) in snapshot.entries {
             let Some(root_mtime) = modified_nanos(&path) else {
                 continue;
             };
             self.entries.insert(
                 path,
                 CachedSize {
-                    on_disk: node.on_disk,
-                    apparent: node.apparent,
-                    entry_count: node.entry_count,
+                    on_disk,
+                    apparent,
+                    entry_count,
                     scanned_at,
                     root_mtime,
                 },
@@ -119,10 +129,40 @@ impl SizeCache {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let bytes = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path.with_extension("lock"))?;
+        // SAFETY: flock only operates on this valid, owned file descriptor.
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut merged = Self::load_from(path);
+        merged.entries.extend(self.entries.clone());
+        let bytes = serde_json::to_vec_pretty(&merged).map_err(io::Error::other)?;
         let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
         fs::write(&temporary, bytes)?;
         fs::rename(temporary, path)
+    }
+}
+
+pub fn snapshot(root: &Path, tree: &ScanTree, scanned_at: SystemTime) -> SizeSnapshot {
+    let mut entries = Vec::new();
+    let scanned_at = epoch_secs(scanned_at);
+    for (index, node) in tree.nodes().iter().enumerate() {
+        let id = NodeId(u32::try_from(index).expect("scan tree exceeded u32 nodes"));
+        if node_depth(tree, id) > 2 {
+            continue;
+        }
+        let path = node_path(tree, root, id);
+        entries.push((path, node.on_disk, node.apparent, node.entry_count));
+    }
+    SizeSnapshot {
+        scanned_at,
+        entries,
     }
 }
 
@@ -258,5 +298,23 @@ mod tests {
         assert!(cache.entries.contains_key(&root.join("one")));
         assert!(cache.entries.contains_key(&root.join("one/two")));
         assert!(!cache.entries.contains_key(&root.join("one/two/three")));
+    }
+
+    #[test]
+    fn save_merges_entries_from_independent_scans() {
+        let fixture = tempdir().unwrap();
+        let path = fixture.path().join("sizes.json");
+        let first_root = fixture.path().join("first");
+        let second_root = fixture.path().join("second");
+        let mut first = SizeCache::default();
+        first.capture(&first_root, &fixture_tree(&first_root), SystemTime::now());
+        first.save_to(&path).unwrap();
+        let mut second = SizeCache::default();
+        second.capture(&second_root, &fixture_tree(&second_root), SystemTime::now());
+        second.save_to(&path).unwrap();
+
+        let merged = SizeCache::load_from(&path);
+        assert!(merged.entries.contains_key(&first_root));
+        assert!(merged.entries.contains_key(&second_root));
     }
 }
