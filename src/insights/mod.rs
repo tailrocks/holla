@@ -4,6 +4,12 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+mod artifacts;
+mod sizing;
+
+pub use artifacts::{Artifact, classify_artifact, collect_artifacts, default_project_roots};
+pub use sizing::{Candidate, SizeEvent, SizeHandle, size};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Safety {
     Rebuildable,

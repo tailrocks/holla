@@ -92,6 +92,8 @@ fn is_protected_user_path(path: &Path, home: &Path) -> bool {
         || path.starts_with(library.join("Application Support"))
         || path.starts_with(library.join("Safari"))
         || path.starts_with(library.join("Containers/com.docker.docker"))
+        || path == library.join("Caches")
+        || path == library.join("Logs")
         || path
             .strip_prefix(&library)
             .ok()
