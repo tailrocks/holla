@@ -28,7 +28,7 @@ Operator directives baked into every plan:
 |------|-------|----------|--------|------------|--------|
 | 001 | PRODUCT.md — mission, scope, UX flows, roadmap | P1 | S | — | DONE |
 | 002 | Test baseline + four confirmed bug fixes | P1 | M | — | DONE |
-| 003 | TermRock migration of the launcher menu | P1 | L | 002 | TODO |
+| 003 | TermRock migration of the launcher menu | P1 | L | 002 | DONE — smoke: empty/repo/40×10 resize; terminal restored |
 | 004 | Task runner: streaming output + cancellation | P1 | L | 003 | TODO |
 | 005 | Provider/Action model, async probe, fuzzy search, confirmations | P1 | L | 003, 004 | TODO |
 | 006 | Disk scan engine (streaming, cancellable, APFS-correct) | P2 | L | 002 | TODO |

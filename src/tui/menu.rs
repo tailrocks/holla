@@ -330,6 +330,7 @@ type ActionId = (usize, usize);
 enum MenuKey {
     Navigate,
     Run,
+    Preview,
     Quit,
 }
 
@@ -340,6 +341,16 @@ enum HeaderSlot {
 }
 
 static MENU_KEYMAP: Keymap<MenuKey> = Keymap::new(&[
+    KeyBinding {
+        chords: &[
+            KeyChord::plain(LogicalKey::Tab),
+            KeyChord::plain(LogicalKey::Right),
+        ],
+        action: MenuKey::Preview,
+        hint: Some("preview"),
+        visibility: Visibility::Shown,
+        glyph: Some("tab"),
+    },
     KeyBinding {
         chords: &[
             KeyChord::plain(LogicalKey::Up),
@@ -436,6 +447,7 @@ pub async fn run(menu: Menu) -> anyhow::Result<()> {
     let first_action = rows.iter().find(|row| row.enabled).map(|row| row.id);
     let mut list_state = ListState::new(first_action);
     let mut preview_scroll = DialogScroll::new();
+    let mut preview_focused = false;
     let mut status_state = StatusBarState::default();
     let cwd = std::env::current_dir()
         .map(|path| path.display().to_string())
@@ -449,6 +461,10 @@ pub async fn run(menu: Menu) -> anyhow::Result<()> {
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     let result = loop {
+        list_state.focused = !preview_focused;
+        let preview = preview_lines(&menu, list_state.selected, &theme);
+        let preview_width = termrock::max_line_width(&preview);
+        let mut preview_viewport = (0usize, 0usize);
         terminal.draw(|f| {
             let [header_area, body_area, footer_area] = Layout::vertical([
                 Constraint::Length(1),
@@ -487,8 +503,12 @@ pub async fn run(menu: Menu) -> anyhow::Result<()> {
             f.render_stateful_widget(&status, header_area, &mut status_state);
 
             let list_panel = Panel::new(&theme)
-                .title("Actions")
-                .emphasis(PanelEmphasis::Focused);
+                .title(" holla ")
+                .emphasis(if preview_focused {
+                    PanelEmphasis::Normal
+                } else {
+                    PanelEmphasis::Focused
+                });
             let list_inner = list_panel.inner(list_area);
             f.render_widget(&list_panel, list_area);
             f.render_stateful_widget(
@@ -500,13 +520,20 @@ pub async fn run(menu: Menu) -> anyhow::Result<()> {
                 &mut list_state,
             );
 
-            let preview = preview_lines(&menu, list_state.selected, &theme);
+            preview_viewport = (
+                usize::from(preview_area.height.saturating_sub(2)),
+                usize::from(preview_area.width.saturating_sub(2)),
+            );
             f.render_stateful_widget(
                 &Viewport {
                     lines: &preview,
                     title: Some("Preview"),
                     content_style: theme.style(Role::Text),
-                    border_style: theme.style(Role::Border),
+                    border_style: theme.style(if preview_focused {
+                        Role::BorderFocused
+                    } else {
+                        Role::Border
+                    }),
                     title_style: theme.style(Role::Text),
                     scroll_track_style: theme.style(Role::ScrollTrack),
                     scroll_thumb_style: theme.style(Role::ScrollThumb),
@@ -526,13 +553,33 @@ pub async fn run(menu: Menu) -> anyhow::Result<()> {
             }
             let key = termrock::input::KeyEvent::from(key);
             let chord = KeyChord::from(key);
+            if MENU_KEYMAP.dispatch(chord) == Some(MenuKey::Quit) {
+                break None;
+            }
+            if preview_focused {
+                if matches!(
+                    key.code,
+                    termrock::input::KeyCode::Tab | termrock::input::KeyCode::Left
+                ) {
+                    preview_focused = false;
+                    continue;
+                }
+                preview_scroll.handle_key(
+                    key,
+                    preview.len(),
+                    preview_viewport.0,
+                    preview_width,
+                    preview_viewport.1,
+                );
+                continue;
+            }
             match list_state.handle_key(&rows, key) {
                 ListOutcome::Activated(id) => break Some(id),
                 ListOutcome::Cancelled => break None,
                 ListOutcome::Changed => preview_scroll = DialogScroll::new(),
                 ListOutcome::Ignored => {
-                    if MENU_KEYMAP.dispatch(chord) == Some(MenuKey::Quit) {
-                        break None;
+                    if MENU_KEYMAP.dispatch(chord) == Some(MenuKey::Preview) {
+                        preview_focused = true;
                     }
                 }
             }
@@ -729,11 +776,19 @@ mod tests {
         assert_eq!(rows[0].id, (0, usize::MAX));
         assert!(!rows[0].enabled);
         assert_eq!(rows[1].id, (0, 0));
+        assert_eq!(rows[1].role, termrock::widgets::RowRole::Item);
+        assert!(rows[1].enabled);
         assert_eq!(rows[2].id, (0, 1));
+        assert_eq!(rows[2].role, termrock::widgets::RowRole::Item);
+        assert!(rows[2].enabled);
         assert_eq!(rows[3].role, termrock::widgets::RowRole::Separator);
         assert_eq!(rows[3].id, (1, usize::MAX));
         assert!(!rows[3].enabled);
         assert_eq!(rows[4].id, (1, 0));
+        assert_eq!(rows[4].role, termrock::widgets::RowRole::Item);
+        assert!(rows[4].enabled);
         assert_eq!(rows[5].id, (1, 1));
+        assert_eq!(rows[5].role, termrock::widgets::RowRole::Item);
+        assert!(rows[5].enabled);
     }
 }
