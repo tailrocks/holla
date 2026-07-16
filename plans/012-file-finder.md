@@ -111,13 +111,36 @@ answers + chosen path, committed
 
 ### Spike verdict
 
-_(filled by executor)_
-
-- Availability/license:
-- API fit:
-- Footprint:
-- Platform:
-- **Chosen path**: fff-core | ignore+nucleo fallback — because:
+- Availability/license (verified 2026-07-17): `fff-core` is not published on
+  crates.io; `fff` `0.3.1` is an unrelated finite-fields crate. The upstream
+  SDK is currently published as prerelease-only `fff-search`
+  `0.9.7-nightly.fce72fa` (MIT, Rust 2024 edition). The fallback's exact
+  current crate is `ignore` `0.4.29` (MIT OR Unlicense).
+- API fit: `fff-search` has synchronous `FilePicker::collect_files` and
+  `fuzzy_search_mixed`, plus a shared-state background scanner. A default
+  `SharedFrecency` leaves the LMDB store uninitialized, so the database is
+  optional at runtime, but `heed` remains unconditional in the dependency
+  graph. The picker accepts one `base_path`; its initial scan builds then
+  commits a snapshot rather than exposing partial searchable hits. Public
+  file/directory search results expose `Score` values but no character match
+  indices, so the required incremental highlighted TUI cannot consume the SDK
+  result directly.
+- Footprint: an empty Rust 1.97.1 scratch binary plus exact `fff-search`
+  resolved 188 packages versus one baseline package: +187 lock packages and
+  151 additional unique normal dependency-tree nodes. `heed` and vendored
+  `git2` are unconditional. A cold release build took 42.21 s on this macOS
+  machine. Referencing `FilePicker::new` grew the stripped-by-default scratch
+  release binary from 430,880 B to 563,840 B (+132,960 B, 30.9%). This exceeds
+  the plan's explicit >150-crate rejection threshold.
+- Platform: exact `fff-search 0.9.7-nightly.fce72fa` compiled successfully on
+  macOS arm64 with the project's current exact Rust 1.97.1 toolchain; no
+  platform failure drove the decision.
+- **Chosen path**: `ignore` `=0.4.29` + existing `nucleo-matcher` — the SDK is
+  disqualified by the recorded dependency threshold and lacks the partial-hit
+  and match-index API required by this design. The fallback uses
+  `WalkBuilder::build_parallel`, adds one direct dual-licensed dependency,
+  keeps matching under holla's existing history policy, and avoids a second
+  database.
 
 ### Step 2: Index wrapper
 
