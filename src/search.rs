@@ -61,18 +61,13 @@ pub fn search_with_history(
     hits.sort_by(|left, right| {
         let left_action = &groups[left.group].actions[left.action];
         let right_action = &groups[right.group].actions[right.action];
-        let left_rank = history_rank(
-            left.score,
-            history.score(&left_action.id, now),
-            remembered == Some(left_action.id.as_str()),
-        );
-        let right_rank = history_rank(
-            right.score,
-            history.score(&right_action.id, now),
-            remembered == Some(right_action.id.as_str()),
-        );
-        right_rank
-            .total_cmp(&left_rank)
+        let left_rank = history_rank(left.score, history.score(&left_action.id, now));
+        let right_rank = history_rank(right.score, history.score(&right_action.id, now));
+        let left_remembered = remembered == Some(left_action.id.as_str());
+        let right_remembered = remembered == Some(right_action.id.as_str());
+        right_remembered
+            .cmp(&left_remembered)
+            .then_with(|| right_rank.total_cmp(&left_rank))
             .then_with(|| right.score.cmp(&left.score))
             .then_with(|| left.group.cmp(&right.group))
             .then_with(|| left.action.cmp(&right.action))
@@ -80,11 +75,10 @@ pub fn search_with_history(
     hits
 }
 
-fn history_rank(base: u32, frecency: f64, remembered: bool) -> f64 {
+fn history_rank(base: u32, frecency: f64) -> f64 {
     let base = f64::from(base);
     let frecency_boost = base * frecency.clamp(0.0, 100.0) / 100.0 * 0.25;
-    let query_boost = if remembered { base * 0.26 } else { 0.0 };
-    base + frecency_boost + query_boost
+    base + frecency_boost
 }
 
 fn haystack(group: &GroupSpec, action_index: usize) -> String {
@@ -191,12 +185,12 @@ mod tests {
 
     #[test]
     fn frecency_boost_is_capped_at_twenty_five_percent() {
-        assert_eq!(history_rank(100, 10_000.0, false), 125.0);
+        assert_eq!(history_rank(100, 10_000.0), 125.0);
     }
 
     #[test]
     fn negative_frecency_never_reduces_text_score() {
-        assert_eq!(history_rank(100, -1.0, false), 100.0);
+        assert_eq!(history_rank(100, -1.0), 100.0);
     }
 
     #[test]
@@ -213,6 +207,33 @@ mod tests {
         assert_eq!(
             groups[hits[0].group].actions[hits[0].action].id,
             "docker.stop"
+        );
+    }
+
+    #[test]
+    fn remembered_query_is_fixed_top_priority_despite_lower_text_score() {
+        let groups = vec![GroupSpec {
+            id: "tools",
+            title: "Tools".into(),
+            actions: vec![
+                action("strong", "cleanup", &[]),
+                action("remembered", "c-l-e-a-n-u-p", &[]),
+            ],
+        }];
+        let baseline = search(&groups, "cleanup");
+        assert!(baseline[0].score > baseline[1].score);
+        assert_eq!(
+            groups[baseline[1].group].actions[baseline[1].action].id,
+            "remembered"
+        );
+        let mut history = FrecencyStore::default();
+        history.record("remembered", "cleanup", 100);
+
+        let hits = search_with_history(&groups, "cleanup", &history, 100);
+
+        assert_eq!(
+            groups[hits[0].group].actions[hits[0].action].id,
+            "remembered"
         );
     }
 }

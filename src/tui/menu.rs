@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     text::{Line, Span, Text},
 };
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, sync::mpsc, time::Duration};
 use termrock::{
     input::KeyCode,
     interaction::Outcome,
@@ -63,6 +63,7 @@ impl Menu {
     }
 
     fn action(&self, id: &str) -> Option<&ActionSpec> {
+        let id = id.strip_prefix("recent:").unwrap_or(id);
         self.groups
             .iter()
             .flat_map(|group| &group.actions)
@@ -181,7 +182,7 @@ fn menu_rows_with_history(
                 enabled: false,
             });
             rows.extend(recent.into_iter().map(|(action, _, _, _)| ListRow {
-                id: action.id.clone(),
+                id: format!("recent:{}", action.id),
                 label: Line::raw(action.label.clone()),
                 trailing: None,
                 role: RowRole::Item,
@@ -345,7 +346,10 @@ pub async fn run() -> anyhow::Result<()> {
     let mut preview_focused = false;
     let mut status_state = StatusBarState::default();
     let mut pending_confirm: Option<PendingConfirm> = None;
-    let mut history = FrecencyStore::load();
+    let mut history = FrecencyStore::default();
+    let (history_sender, history_receiver) = mpsc::sync_channel(1);
+    let mut history_sender = Some(history_sender);
+    let mut history_loaded = false;
     let cwd = std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
@@ -372,6 +376,16 @@ pub async fn run() -> anyhow::Result<()> {
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     let selected_action = loop {
+        if !history_loaded {
+            match history_receiver.try_recv() {
+                Ok(loaded) => {
+                    history = loaded;
+                    history_loaded = true;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => history_loaded = true,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         if let Some(scans) = scans.as_mut() {
             loop {
                 match scans.poll_next() {
@@ -531,6 +545,13 @@ pub async fn run() -> anyhow::Result<()> {
         if scans.is_none() {
             // First frame is now visible. Only then may blocking provider work start.
             scans = Some(StdSubscription(providers::spawn_scans()));
+            if let Some(sender) = history_sender.take() {
+                std::thread::Builder::new()
+                    .name("holla-history-load".into())
+                    .spawn(move || {
+                        let _ = sender.send(FrecencyStore::load());
+                    })?;
+            }
             continue;
         }
 
@@ -598,13 +619,14 @@ pub async fn run() -> anyhow::Result<()> {
             match list_state.handle_key(&rows, key) {
                 Outcome::Activated(id) => {
                     if let Some(action) = menu.action(&id) {
+                        let action_id = action.id.clone();
                         if needs_confirmation(action) {
                             pending_confirm = Some(PendingConfirm {
-                                action_id: id,
+                                action_id,
                                 state: ChoiceDialogState::new(Some(ConfirmChoice::Cancel)),
                             });
                         } else {
-                            break Some(id);
+                            break Some(action_id);
                         }
                     }
                 }
@@ -628,6 +650,12 @@ pub async fn run() -> anyhow::Result<()> {
     if let Some(id) = selected_action
         && let Some(action) = menu.action(&id)
     {
+        if !history_loaded {
+            history =
+                tokio::task::spawn_blocking(move || history_receiver.recv().unwrap_or_default())
+                    .await
+                    .unwrap_or_default();
+        }
         let now = now_epoch_secs();
         history.record(&id, search_state.value(), now);
         let save = tokio::task::spawn_blocking(move || history.save(now));
@@ -935,9 +963,11 @@ mod tests {
         let rows = menu_rows_with_history(&menu, "", &Theme::default(), &history, 100);
 
         assert_eq!(rows[0].id, "separator:recent");
-        assert_eq!(rows[1].id, "one");
+        assert_eq!(rows[1].id, "recent:one");
         assert_eq!(rows[2].id, "separator:first");
         assert_eq!(rows[3].id, "one");
+        assert_ne!(rows[1].id, rows[3].id);
+        assert_eq!(menu.action(&rows[1].id).unwrap().id, "one");
     }
 
     #[test]

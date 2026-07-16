@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    fs, io,
+    fs::{self, OpenOptions},
+    io,
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -19,12 +21,15 @@ pub struct ActionHistory {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FrecencyStore {
-    #[serde(default = "schema_version")]
     v: u8,
     #[serde(default)]
     pub actions: HashMap<String, ActionHistory>,
     #[serde(default)]
     pub queries: HashMap<String, String>,
+    #[serde(skip)]
+    pending_uses: Vec<(String, u64)>,
+    #[serde(skip)]
+    pending_queries: HashMap<String, String>,
 }
 
 impl Default for FrecencyStore {
@@ -33,6 +38,8 @@ impl Default for FrecencyStore {
             v: SCHEMA_VERSION,
             actions: HashMap::new(),
             queries: HashMap::new(),
+            pending_uses: Vec::new(),
+            pending_queries: HashMap::new(),
         }
     }
 }
@@ -65,13 +72,15 @@ impl FrecencyStore {
     pub fn record(&mut self, action_id: &str, query: &str, now: u64) {
         let uses = &mut self.actions.entry(action_id.to_owned()).or_default().uses;
         uses.push(now);
+        self.pending_uses.push((action_id.to_owned(), now));
         if uses.len() > MAX_USES {
             uses.drain(..uses.len() - MAX_USES);
         }
 
         let query = normalize_query(query);
         if !query.is_empty() {
-            self.queries.insert(query, action_id.to_owned());
+            self.queries.insert(query.clone(), action_id.to_owned());
+            self.pending_queries.insert(query, action_id.to_owned());
         }
     }
 
@@ -99,12 +108,37 @@ impl FrecencyStore {
     }
 
     fn save_to(&mut self, path: &Path, now: u64) -> io::Result<()> {
-        self.prune(now);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let bytes = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
-        fs::write(path, bytes)
+        let lock_path = path.with_extension("lock");
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock_path)?;
+        // SAFETY: flock only operates on this valid, owned file descriptor.
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut merged = Self::load_from(path);
+        for (action_id, timestamp) in self.pending_uses.drain(..) {
+            let uses = &mut merged.actions.entry(action_id).or_default().uses;
+            uses.push(timestamp);
+            if uses.len() > MAX_USES {
+                uses.drain(..uses.len() - MAX_USES);
+            }
+        }
+        merged.queries.extend(self.pending_queries.drain());
+        merged.prune(now);
+        let bytes = serde_json::to_vec_pretty(&merged).map_err(io::Error::other)?;
+        let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+        fs::write(&temporary, bytes)?;
+        fs::rename(temporary, path)?;
+        *self = merged;
+        Ok(())
     }
 
     fn prune(&mut self, now: u64) {
@@ -142,15 +176,11 @@ pub fn frecency_score(uses: &[u64], now: u64) -> f64 {
             (-DECAY_PER_DAY * age_days).exp()
         })
         .sum::<f64>();
-    if uses.len() > 10 {
+    if raw > 10.0 {
         10.0 + (raw - 10.0).max(0.0).sqrt()
     } else {
         raw
     }
-}
-
-fn schema_version() -> u8 {
-    SCHEMA_VERSION
 }
 
 fn history_disabled() -> bool {
@@ -224,6 +254,12 @@ mod tests {
     }
 
     #[test]
+    fn many_old_uses_do_not_outrank_one_current_use() {
+        let old = vec![NOW - 90 * DAY; 20];
+        assert!(frecency_score(&old, NOW) < frecency_score(&[NOW], NOW));
+    }
+
+    #[test]
     fn record_keeps_only_last_twenty_uses() {
         let mut store = FrecencyStore::default();
         for timestamp in 0..25 {
@@ -255,6 +291,32 @@ mod tests {
         let path = temp.path().join("frecency.json");
         fs::write(&path, br#"{"v":2,"actions":{},"queries":{}}"#).unwrap();
         assert!(FrecencyStore::load_from(&path).actions.is_empty());
+    }
+
+    #[test]
+    fn missing_schema_loads_as_empty_store() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("frecency.json");
+        fs::write(&path, br#"{"actions":{"old":{"uses":[1]}},"queries":{}}"#).unwrap();
+        assert!(FrecencyStore::load_from(&path).actions.is_empty());
+    }
+
+    #[test]
+    fn sequential_writers_merge_new_uses_instead_of_losing_updates() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("frecency.json");
+        let mut first = FrecencyStore::default();
+        let mut second = FrecencyStore::default();
+        first.record("action", "one", NOW);
+        second.record("action", "two", NOW + 1);
+
+        first.save_to(&path, NOW + 1).unwrap();
+        second.save_to(&path, NOW + 1).unwrap();
+
+        let merged = FrecencyStore::load_from(&path);
+        assert_eq!(merged.actions["action"].uses, [NOW, NOW + 1]);
+        assert_eq!(merged.remembered_action("one"), Some("action"));
+        assert_eq!(merged.remembered_action("two"), Some("action"));
     }
 
     #[test]

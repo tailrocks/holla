@@ -35,7 +35,7 @@ Operator directives baked into every plan:
 | 007 | TermRock extensions (multi-select, metadata cells, progress, log pane) | P2 | L | 003 | DONE — extensions landed at `ccf0646`; consumer pinned to v0.10.0 `0089bd7` |
 | 008 | Disk analyzer TUI + validated deletion choke point | P2 | L | 005, 006, 007 | DONE — TermRock v0.10.0 `0089bd7`; smoke: 52.43 MB Trash + permanent delete, rescan, ops.log, terminal restore |
 | 009 | macOS cleanup insights taxonomy | P3 | L | 005, 006, 008 | DONE — 19 insights; `pgrep` guard (sysinfo measured 50.97 ms); fake-HOME Xcode 65.54 kB Trash round-trip + ops.log; terminal restored |
-| 010 | Launcher frecency ranking + query memory | P3 | M | 005 | TODO |
+| 010 | Launcher frecency ranking + query memory | P3 | M | 005 | DONE — TermRock v0.10.0 `0089bd7`; fake-cache PTY: query activation persisted, relaunch showed Recent first, second activation produced 2 uses; terminal restored |
 | 011 | Disk speed pack: size cache, Spotlight top files, overview | P3 | M | 006, 008 | TODO |
 | 012 | File & folder finder (fff-core spike + integrate) | P3 | L | 005 | TODO |
 | 013 | User-defined actions + scriptable CLI (`list`/`run`/`doctor`) | P3 | M | 005 | TODO |

@@ -12,6 +12,7 @@
 
 ## Status
 
+- **State**: DONE
 - **Priority**: P3
 - **Effort**: M
 - **Risk**: LOW (additive ranking layer; launcher works identically with an
@@ -123,12 +124,12 @@ Colocated modules per repo convention.
 
 ## Done criteria
 
-- [ ] Empty frecency store → launcher behavior byte-identical to plan 005
+- [x] Empty frecency store → launcher behavior byte-identical to plan 005
       (existing tests unmodified, green).
-- [ ] Boost capped (test-enforced); text relevance dominant.
-- [ ] Corrupt store never crashes or blocks startup (test-enforced).
-- [ ] `HOLLA_NO_HISTORY=1` honored (test-enforced).
-- [ ] Four gates exit 0; `plans/README.md` row updated.
+- [x] Boost capped (test-enforced); text relevance dominant.
+- [x] Corrupt store never crashes or blocks startup (test-enforced).
+- [x] `HOLLA_NO_HISTORY=1` honored (test-enforced).
+- [x] Four gates exit 0; `plans/README.md` row updated.
 
 ## STOP conditions
 
@@ -137,6 +138,16 @@ Colocated modules per repo convention.
   needs a JSON file, not a database).
 
 ## Maintenance notes
+
+- Fake-cache PTY smoke at `/tmp/holla-plan010.2t83lS`: activated
+  `disk.scan-custom` from query `custom`; relaunch rendered `Recent` first
+  with that action selected; activating the Recent copy appended a second
+  use while preserving query memory. Both nested prompt cancellations
+  restored the terminal. Store writes use a lock, pending-event merge, and
+  atomic replacement so concurrent holla processes do not lose uses.
+- Completion gates: fmt, clippy `-D warnings`, 166 tests passed with 2
+  intentional manual tests skipped, and build succeeded against TermRock
+  v0.10.0 `0089bd7`.
 
 - Schema versioned; bump `"v"` on change and migrate-or-discard old files.
 - If per-project ranking is ever wanted, key = (project root hash,
