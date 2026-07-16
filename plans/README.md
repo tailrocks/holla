@@ -40,7 +40,7 @@ Operator directives baked into every plan:
 | 012 | File & folder finder (fff-core spike + integrate) | P3 | L | 005 | DONE |
 | 013 | User-defined actions + scriptable CLI (`list`/`run`/`doctor`) | P3 | M | 005 | DONE |
 | 014 | Provider expansion: node/just/make/task, cargo, brew services, git hygiene | P3 | M | 005 | DONE |
-| 015 | Linux port readiness (design/spike + bootable slice) | P3 | L | 005 (006/008 soft) | TODO |
+| 015 | Linux port readiness (design/spike + bootable slice) | P3 | L | 005 (006/008 soft) | DONE — pinned Debian container: PTY/providers/runner/trash green; disk 1,142,784 B = `du` exactly |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale)

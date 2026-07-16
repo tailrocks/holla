@@ -445,10 +445,19 @@ async fn run_task(
         let _ = reader.await;
     }
     process_groups.lock().expect("process group lock")[task] = None;
-    let _ = tx.send(TaskEvent::Done {
-        task,
-        success: !cancelled.load(Ordering::Acquire) && status.is_ok_and(|status| status.success()),
-    });
+    let was_cancelled = cancelled.load(Ordering::Acquire);
+    let success = !was_cancelled && status.as_ref().is_ok_and(|status| status.success());
+    if !was_cancelled && !success {
+        let detail = match &status {
+            Ok(status) => format!("process exited with {status}"),
+            Err(error) => format!("could not wait for process: {error}"),
+        };
+        let _ = tx.send(TaskEvent::Line {
+            task,
+            line: format!("Error: {detail}"),
+        });
+    }
+    let _ = tx.send(TaskEvent::Done { task, success });
 }
 
 async fn reap_process_group(pgid: i32) {
@@ -1097,9 +1106,12 @@ mod tests {
 
         let events = collect_events(&rx, 1);
 
-        assert!(events.iter().any(
-            |event| matches!(event, TaskEvent::Line { line, .. } if line.starts_with("Error: "))
-        ));
+        assert!(
+            events.iter().any(
+                |event| matches!(event, TaskEvent::Line { line, .. } if line.starts_with("Error: "))
+            ),
+            "events: {events:?}"
+        );
         assert!(matches!(
             events.last(),
             Some(TaskEvent::Done { success: false, .. })

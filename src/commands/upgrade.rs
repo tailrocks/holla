@@ -40,6 +40,7 @@ pub async fn run_brew() -> anyhow::Result<()> {
     .await
 }
 
+#[cfg(target_os = "macos")]
 pub async fn run_brew_casks() -> anyhow::Result<()> {
     run_tasks(vec![
         TaskDef::new("brew update", "brew", &["update"]),

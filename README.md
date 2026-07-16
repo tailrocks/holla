@@ -60,6 +60,11 @@ See the full design and install instructions in [docs/debian-apt-repo.md](docs/d
 
 Debian packages (`.deb`) for `amd64` and `arm64` are also attached to every GitHub Release and can be installed directly with `dpkg -i` as a fallback.
 
+The Linux launcher, Git/Cargo/project providers, task runner, disk scanner, and
+FreeDesktop Trash path are verified on Debian. macOS-only actions and cleanup
+insights are hidden. Native apt/dnf, systemd-user, and broader XDG insights are
+sequenced in the [Linux port design](docs/linux-port.md).
+
 ### From source
 
 ```bash

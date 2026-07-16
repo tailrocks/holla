@@ -30,26 +30,25 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
         ));
     }
     if probe.brew {
-        actions.extend([
-            ActionSpec::new(
-                "upgrade.brew-packages",
-                "upgrade: brew packages",
-                "brew update && brew upgrade",
-                "$ brew update\n$ brew upgrade --greedy\n$ brew cleanup\n$ brew autoremove\n$ brew doctor",
-                &["update", "homebrew", "cleanup"],
-                Danger::Mutating,
-                || Box::pin(crate::commands::upgrade::run_brew()),
-            ),
-            ActionSpec::new(
-                "upgrade.brew-casks",
-                "upgrade: brew casks",
-                "Upgrade GUI apps via Homebrew",
-                "$ brew update\n$ brew upgrade --cask --greedy\n$ brew cleanup\n$ brew autoremove\n$ brew doctor",
-                &["update", "homebrew", "apps", "cleanup"],
-                Danger::Mutating,
-                || Box::pin(crate::commands::upgrade::run_brew_casks()),
-            ),
-        ]);
+        actions.push(ActionSpec::new(
+            "upgrade.brew-packages",
+            "upgrade: brew packages",
+            "brew update && brew upgrade",
+            "$ brew update\n$ brew upgrade --greedy\n$ brew cleanup\n$ brew autoremove\n$ brew doctor",
+            &["update", "homebrew", "cleanup"],
+            Danger::Mutating,
+            || Box::pin(crate::commands::upgrade::run_brew()),
+        ));
+        #[cfg(target_os = "macos")]
+        actions.push(ActionSpec::new(
+            "upgrade.brew-casks",
+            "upgrade: brew casks",
+            "Upgrade GUI apps via Homebrew",
+            "$ brew update\n$ brew upgrade --cask --greedy\n$ brew cleanup\n$ brew autoremove\n$ brew doctor",
+            &["update", "homebrew", "apps", "cleanup"],
+            Danger::Mutating,
+            || Box::pin(crate::commands::upgrade::run_brew_casks()),
+        ));
     }
     if probe.mise {
         actions.push(ActionSpec::new(
@@ -107,4 +106,25 @@ fn build_upgrade_preview(probe: &Probe) -> String {
         lines.push("  $ brew update && brew upgrade --greedy && brew cleanup && brew autoremove && brew doctor".into());
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brew_cask_action_matches_platform() {
+        let probe = Probe {
+            brew: true,
+            ..Probe::empty()
+        };
+        let group = group(&probe).unwrap();
+        assert_eq!(
+            group
+                .actions
+                .iter()
+                .any(|action| action.id == "upgrade.brew-casks"),
+            cfg!(target_os = "macos")
+        );
+    }
 }

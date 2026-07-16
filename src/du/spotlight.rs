@@ -1,18 +1,25 @@
+use std::path::PathBuf;
+
+#[cfg(any(target_os = "macos", test))]
 use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
-    path::PathBuf,
     time::Duration,
 };
 
 #[cfg(test)]
 use std::fs;
 
+#[cfg(any(target_os = "macos", test))]
 use futures::{StreamExt, stream};
+#[cfg(any(target_os = "macos", test))]
 use tokio::{process::Command, time::timeout};
 
+#[cfg(any(target_os = "macos", test))]
 const QUERY: &str = "kMDItemFSSize >= 104857600";
+#[cfg(any(target_os = "macos", test))]
 const LIMIT: usize = 50;
+#[cfg(target_os = "macos")]
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,10 +34,17 @@ pub enum TopFiles {
     Unavailable,
 }
 
+#[cfg(target_os = "macos")]
 pub async fn discover() -> TopFiles {
     discover_with("mdfind", &[], TIMEOUT).await
 }
 
+#[cfg(not(target_os = "macos"))]
+pub async fn discover() -> TopFiles {
+    TopFiles::Unavailable
+}
+
+#[cfg(any(target_os = "macos", test))]
 async fn discover_with(
     program: impl AsRef<OsStr>,
     prefix_args: &[&OsStr],
@@ -58,6 +72,7 @@ async fn discover_with(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_paths(output: &[u8]) -> Vec<PathBuf> {
     output
         .split(|byte| *byte == 0)
@@ -66,17 +81,18 @@ fn parse_paths(output: &[u8]) -> Vec<PathBuf> {
         .collect()
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, any(target_os = "macos", test)))]
 fn os_string(bytes: &[u8]) -> OsString {
     use std::os::unix::ffi::OsStringExt;
     OsString::from_vec(bytes.to_vec())
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), any(target_os = "macos", test)))]
 fn os_string(bytes: &[u8]) -> OsString {
     OsString::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
+#[cfg(any(target_os = "macos", test))]
 async fn rank_paths_with_stat(paths: Vec<PathBuf>) -> Vec<TopFile> {
     let mut seen = HashSet::new();
     let unique = paths
@@ -93,6 +109,7 @@ async fn rank_paths_with_stat(paths: Vec<PathBuf>) -> Vec<TopFile> {
     files
 }
 
+#[cfg(any(target_os = "macos", test))]
 async fn stat_top_file(path: PathBuf) -> Option<TopFile> {
     let mut command = Command::new("/usr/bin/stat");
     command.arg("-f").arg("%p:%b").arg(&path).kill_on_drop(true);
@@ -130,6 +147,7 @@ fn rank_paths(paths: Vec<PathBuf>) -> Vec<TopFile> {
     files
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn sort_and_truncate(files: &mut Vec<TopFile>) {
     files.sort_by(|left, right| {
         right

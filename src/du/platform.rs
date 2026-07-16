@@ -89,6 +89,7 @@ pub(crate) fn is_dataless(_metadata: &std::fs::Metadata) -> bool {
     false
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn default_skip_paths(root: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if root == Path::new("/") {
@@ -98,6 +99,11 @@ pub(crate) fn default_skip_paths(root: &Path) -> Vec<PathBuf> {
         paths.push(PathBuf::from(home).join("Library/Mobile Documents"));
     }
     paths
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn default_skip_paths(_root: &Path) -> Vec<PathBuf> {
+    Vec::new()
 }
 
 pub fn should_skip(path: &Path, options: &ScanOptions) -> bool {
@@ -113,6 +119,7 @@ mod tests {
         assert!(default_workers() >= 1);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn root_scan_skips_data_volume_but_subtree_scan_does_not() {
         let root = ScanOptions::new("/");
@@ -128,6 +135,7 @@ mod tests {
         ));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn mobile_documents_prefix_is_skipped() {
         let options = ScanOptions {
@@ -145,5 +153,12 @@ mod tests {
             Path::new("/Users/person/Library/Application Support"),
             &options
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_defaults_do_not_guess_mount_paths() {
+        assert!(default_skip_paths(Path::new("/")).is_empty());
+        assert!(default_skip_paths(Path::new("/tmp")).is_empty());
     }
 }

@@ -275,13 +275,38 @@ async fn execute(path: PathBuf, action: FinderAction) -> anyhow::Result<()> {
 }
 
 async fn run_open(path: &Path, reveal: bool) -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
     let mut command = Command::new("open");
+    #[cfg(target_os = "macos")]
     if reveal {
         command.arg("-R");
     }
-    let status = command.arg(path).status().await?;
-    ensure!(status.success(), "open exited with {status}");
+    #[cfg(target_os = "macos")]
+    let (program, status) = ("open", command.arg(path).status().await?);
+
+    #[cfg(target_os = "linux")]
+    let (program, status) = (
+        "xdg-open",
+        Command::new("xdg-open")
+            .arg(open_target(path, reveal))
+            .status()
+            .await?,
+    );
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    anyhow::bail!("opening files is unsupported on this platform");
+
+    ensure!(status.success(), "{program} exited with {status}");
     Ok(())
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn open_target(path: &Path, reveal: bool) -> &Path {
+    if reveal {
+        path.parent().unwrap_or(path)
+    } else {
+        path
+    }
 }
 
 fn copy_path(path: &Path) -> anyhow::Result<()> {
@@ -402,5 +427,12 @@ mod tests {
             rows[0].label.spans[parent_start + 1].style,
             theme.style(Role::TextMuted)
         );
+    }
+
+    #[test]
+    fn reveal_fallback_targets_parent_directory() {
+        let path = Path::new("/tmp/project/file.rs");
+        assert_eq!(open_target(path, true), Path::new("/tmp/project"));
+        assert_eq!(open_target(path, false), path);
     }
 }
