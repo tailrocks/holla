@@ -155,11 +155,15 @@ fn discover_child_git_repos() -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(".") else {
         return vec![];
     };
-    let mut repos: Vec<_> = entries
+    let repos = entries
         .flatten()
         .filter(|e| e.path().join(".git").exists())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
+    sort_repo_names(repos)
+}
+
+fn sort_repo_names(mut repos: Vec<String>) -> Vec<String> {
     repos.sort();
     repos
 }
@@ -193,5 +197,12 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].name, "release");
         assert_eq!(tasks[0].description, "Publish artifacts");
+    }
+
+    #[test]
+    fn sorts_discovered_child_repositories_alphabetically() {
+        let repos = sort_repo_names(vec!["zeta".into(), "alpha".into(), "beta".into()]);
+
+        assert_eq!(repos, ["alpha", "beta", "zeta"]);
     }
 }
