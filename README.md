@@ -4,6 +4,8 @@ Adaptive dev environment CLI. Run `holla` in any directory and get an interactiv
 
 No config. No setup. It just looks at what you have and shows you what's possible.
 
+Product brief, mission, and roadmap: see [PRODUCT.md](PRODUCT.md).
+
 ## How it works
 
 When you run `holla`, it probes your system for installed tools (git, docker, brew, gradle, etc.) and builds a menu on the fly. Only the tools you actually have show up.
