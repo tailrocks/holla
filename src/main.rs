@@ -94,6 +94,10 @@ async fn run(cli: Cli) -> anyhow::Result<u8> {
             Ok(if registry.warnings.is_empty() { 0 } else { 4 })
         }
         CliCommand::Run { action_id, yes } => {
+            if !registry.warnings.is_empty() {
+                print_warnings(&registry.warnings);
+                return Ok(4);
+            }
             let action = registry
                 .groups
                 .iter()
@@ -136,16 +140,23 @@ async fn run(cli: Cli) -> anyhow::Result<u8> {
                     .map(|group| group.actions.len())
                     .sum::<usize>()
             );
+            for group in &registry.groups {
+                println!(
+                    "detected: {} ({} actions)",
+                    group.title,
+                    group.actions.len()
+                );
+            }
             let global = config::global_actions_path();
             println!(
                 "global config: {}",
                 global
                     .as_deref()
-                    .map_or_else(|| "unavailable".into(), |path| path.display().to_string())
+                    .map_or_else(|| "unavailable".into(), describe_config)
             );
             println!(
                 "project config: {}",
-                std::path::Path::new(".holla.toml").display()
+                describe_config(std::path::Path::new(".holla.toml"))
             );
             if registry.warnings.is_empty() {
                 println!("config: ok");
@@ -180,4 +191,16 @@ fn print_warnings(warnings: &[String]) {
     for warning in warnings {
         eprintln!("holla: config warning: {warning}");
     }
+}
+
+fn describe_config(path: &std::path::Path) -> String {
+    format!(
+        "{} ({})",
+        path.display(),
+        if path.is_file() {
+            "loaded"
+        } else {
+            "not found"
+        }
+    )
 }

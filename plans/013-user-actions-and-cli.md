@@ -10,6 +10,7 @@
 
 ## Status
 
+- **Completed**: 2026-07-17
 - **Priority**: P3
 - **Effort**: M
 - **Risk**: MED (user-supplied commands enter the action system — danger
@@ -161,16 +162,28 @@ JSON (5, via assert_cmd), provider merge/collision (1+).
 
 ## Done criteria
 
-- [ ] Zero-config behavior unchanged (no config files → identical launcher;
+- [x] Zero-config behavior unchanged (no config files → identical launcher;
       existing tests untouched and green).
-- [ ] No shell-string command path exists (`grep -rn '"sh"' src/config.rs
+- [x] No shell-string command path exists (`grep -rn '"sh"' src/config.rs
       src/providers/user.rs` → none; argv arrays only).
-- [ ] `danger` mandatory in config (test-enforced); destructive headless
+- [x] `danger` mandatory in config (test-enforced); destructive headless
       runs require `--yes` (test-enforced exit 3).
-- [ ] Project-file trust: first-run dialog + persisted hash + re-prompt on
+- [x] Project-file trust: first-run dialog + persisted hash + re-prompt on
       change (tests + manual smoke recorded).
-- [ ] `holla list --json` stable schema documented in the subcommand help.
-- [ ] Four gates exit 0; `plans/README.md` row updated.
+- [x] `holla list --json` stable schema documented in the subcommand help.
+- [x] Four gates exit 0; `plans/README.md` row updated.
+
+### Completion evidence (2026-07-17)
+
+- Exact latest TermRock SHA `51910bf4e9495578ad5a2d5bc278a4c195439a4f`;
+  migrations 0020 and 0021 read and applied after the prior pin.
+- `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo nextest run --all-features` (222 passed), `cargo build`, and format
+  checks passed. `holla list --json | python3 -m json.tool` parsed cleanly;
+  `holla doctor` reported seven groups, 30 actions, and healthy config.
+- Isolated PTY smoke showed `⚠ unreviewed`, exact `argv[0]`/`argv[1]`, accepted
+  Trust and run, streamed `manual-trust-ok`, and restored the terminal. CLI
+  tests prove persisted trust and re-prompt after a file hash change.
 
 ## STOP conditions
 

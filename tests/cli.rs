@@ -85,7 +85,19 @@ fn doctor_reports_registry_and_config() {
         .assert()
         .success()
         .stdout(predicate::str::contains("registry:"))
+        .stdout(predicate::str::contains("detected:"))
         .stdout(predicate::str::contains("config: ok"));
+}
+
+#[test]
+fn malformed_config_exits_four() {
+    let directory = TempDir::new().unwrap();
+    write_global(&directory, "[[action]");
+    command(&directory)
+        .args(["run", "git.status"])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("config warning"));
 }
 
 #[test]

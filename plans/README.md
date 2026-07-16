@@ -38,7 +38,7 @@ Operator directives baked into every plan:
 | 010 | Launcher frecency ranking + query memory | P3 | M | 005 | DONE — TermRock v0.11.0 `ac54f91`; fake-cache PTY: query activation persisted, relaunch showed Recent first, second activation produced 2 uses; terminal restored |
 | 011 | Disk speed pack: size cache, Spotlight top files, overview | P3 | M | 006, 008 | DONE — cached first frame <100 ms; Spotlight 50 results in 0.34 s; overview + terminal restore smoke |
 | 012 | File & folder finder (fff-core spike + integrate) | P3 | L | 005 | DONE |
-| 013 | User-defined actions + scriptable CLI (`list`/`run`/`doctor`) | P3 | M | 005 | TODO |
+| 013 | User-defined actions + scriptable CLI (`list`/`run`/`doctor`) | P3 | M | 005 | DONE |
 | 014 | Provider expansion: node/just/make/task, cargo, brew services, git hygiene | P3 | M | 005 | TODO |
 | 015 | Linux port readiness (design/spike + bootable slice) | P3 | L | 005 (006/008 soft) | TODO |
 

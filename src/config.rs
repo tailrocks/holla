@@ -247,7 +247,7 @@ impl TrustStore {
         let contents = serde_json::to_vec_pretty(&TrustFile { v: 1, hashes })?;
         let parent = path.parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(parent)?;
-        let temporary = path.with_extension("json.tmp");
+        let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
         std::fs::write(&temporary, contents)?;
         std::fs::rename(temporary, path)?;
         Ok(())
