@@ -80,6 +80,7 @@ pub async fn run(filter: Option<&'static str>) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("home directory is unavailable"))?;
     let specs: Vec<_> = insights::REGISTRY
         .iter()
+        .filter(|spec| spec.id != "docker.data")
         .filter(|spec| filter.is_none_or(|id| spec.id == id))
         .filter(|spec| insights::detect(spec, &probe))
         .collect();

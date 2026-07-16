@@ -91,6 +91,9 @@ fn is_protected_user_path(path: &Path, home: &Path) -> bool {
         || path.starts_with(library.join("Keychains"))
         || path.starts_with(library.join("Application Support"))
         || path.starts_with(library.join("Safari"))
+        || path.starts_with(library.join("WebKit"))
+        || is_browser_container_path(path, &library.join("Containers"))
+        || is_browser_container_path(path, &library.join("Group Containers"))
         || path.starts_with(library.join("Containers/com.docker.docker"))
         || path == library.join("Caches")
         || path == library.join("Logs")
@@ -105,6 +108,23 @@ fn is_protected_user_path(path: &Path, home: &Path) -> bool {
                     .starts_with(b"Mobile Documents")
             })
         || path == mobile_documents
+}
+
+fn is_browser_container_path(path: &Path, root: &Path) -> bool {
+    const BROWSER_MARKERS: &[&str] = &[
+        "safari", "chrome", "chromium", "firefox", "brave", "edge", "vivaldi", "opera", "arc",
+        "zen",
+    ];
+    path.strip_prefix(root)
+        .ok()
+        .and_then(|relative| relative.components().next())
+        .and_then(|component| component.as_os_str().to_str())
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|container| {
+            BROWSER_MARKERS
+                .iter()
+                .any(|marker| container.contains(marker))
+        })
 }
 
 pub fn execute(plan: &DeletePlan) -> DeleteReport {

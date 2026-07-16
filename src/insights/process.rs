@@ -8,20 +8,22 @@ pub fn is_process_running(name: &str) -> bool {
     if exact {
         return true;
     }
-    // macOS can expose a truncated process name to `pgrep -x`. Fall back to
-    // the executable basename in the full command while retaining boundaries.
-    let escaped = name.chars().fold(String::new(), |mut output, character| {
-        if ".^$*+?()[]{}\\|".contains(character) {
-            output.push('\\');
-        }
-        output.push(character);
-        output
-    });
-    let pattern = format!(r"(^|/){escaped}[^/ ]*($| )");
-    Command::new("pgrep")
-        .args(["-f", &pattern])
-        .status()
-        .is_ok_and(|status| status.success())
+    // macOS truncates the name used by pgrep. `ps ucomm` exposes that same
+    // stable kernel name, so compare its basename without fuzzy substrings.
+    Command::new("ps")
+        .args(["-axo", "ucomm="])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| process_list_contains(&output.stdout, name))
+}
+
+fn process_list_contains(output: &[u8], name: &str) -> bool {
+    String::from_utf8_lossy(output).lines().any(|command| {
+        std::path::Path::new(command.trim())
+            .file_name()
+            .is_some_and(|reported| reported == name)
+    })
 }
 
 #[cfg(test)]

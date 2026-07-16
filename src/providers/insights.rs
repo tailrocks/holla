@@ -35,18 +35,27 @@ pub(super) fn group(detected: &[&'static InsightSpec]) -> GroupSpec {
         Danger::Safe,
         || Box::pin(tui::insights::run(None)),
     )];
-    actions.extend(detected.iter().map(|spec| {
-        let id = spec.id;
-        ActionSpec::new(
-            format!("cleanup.{id}"),
-            format!("cleanup: {}", spec.title),
-            spec.explain,
-            format!("$ holla cleanup review {id}"),
-            &["cleanup", "cache", "storage"],
-            Danger::Safe,
-            move || Box::pin(tui::insights::run(Some(id))),
-        )
-    }));
+    actions.extend(
+        detected
+            .iter()
+            .filter(|spec| spec.id != "docker.data")
+            .map(|spec| {
+                let id = spec.id;
+                let mut action = ActionSpec::new(
+                    format!("cleanup.{id}"),
+                    format!("cleanup: {}", spec.title),
+                    spec.explain,
+                    format!("$ holla cleanup review {id}"),
+                    &["cleanup", "cache", "storage"],
+                    Danger::Safe,
+                    move || Box::pin(tui::insights::run(Some(id))),
+                );
+                action
+                    .keywords
+                    .push(id.split('.').next().unwrap_or(id).to_owned());
+                action
+            }),
+    );
     GroupSpec {
         id: "cleanup",
         title: "Cleanup".into(),
@@ -73,5 +82,18 @@ mod tests {
                 .iter()
                 .all(|action| action.danger == Danger::Safe)
         );
+    }
+
+    #[test]
+    fn detected_action_keywords_include_tool_name() {
+        let group = group(&[insights::spec("brew.cache").unwrap()]);
+        assert!(group.actions[1].keywords.iter().any(|word| word == "brew"));
+    }
+
+    #[test]
+    fn docker_pointer_is_left_to_docker_provider_actions() {
+        let group = group(&[insights::spec("docker.data").unwrap()]);
+        assert_eq!(group.actions.len(), 1);
+        assert_eq!(group.actions[0].id, "cleanup.review-all");
     }
 }

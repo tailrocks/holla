@@ -272,6 +272,26 @@ pub async fn run_parallel_tasks(tasks: Vec<TaskDef>) -> anyhow::Result<()> {
     run_tui(tasks, true).await
 }
 
+pub(crate) async fn run_tasks_headless(tasks: Vec<TaskDef>) -> bool {
+    let task_count = tasks.len();
+    let (tx, rx) = mpsc::channel();
+    let handles = spawn_tasks(tasks, false, tx);
+    let mut supervisor = TaskSupervisor::new(handles);
+    let success = tokio::task::spawn_blocking(move || {
+        let mut completed = vec![false; task_count];
+        while let Ok(event) = rx.recv() {
+            if let TaskEvent::Done { task, success } = event {
+                completed[task] = success;
+            }
+        }
+        completed.into_iter().all(|done| done)
+    })
+    .await
+    .unwrap_or(false);
+    supervisor.disarm();
+    success
+}
+
 fn spawn_tasks(defs: Vec<TaskDef>, parallel: bool, tx: mpsc::Sender<TaskEvent>) -> Vec<TaskHandle> {
     let process_groups = Arc::new(Mutex::new(vec![None; defs.len()]));
     let cancelled = Arc::new(AtomicBool::new(false));

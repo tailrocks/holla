@@ -14,7 +14,7 @@ pub struct ActionSpec {
     pub label: String,
     pub description: String,
     pub preview: String,
-    pub keywords: &'static [&'static str],
+    pub keywords: Vec<String>,
     pub danger: Danger,
     pub run: Box<dyn Fn() -> ActionFuture + Send>,
 }
@@ -40,7 +40,10 @@ impl ActionSpec {
             label: label.into(),
             description: description.into(),
             preview: preview.into(),
-            keywords,
+            keywords: keywords
+                .iter()
+                .map(|keyword| (*keyword).to_owned())
+                .collect(),
             danger,
             run: Box::new(run),
         }

@@ -120,11 +120,30 @@ fn resolved_roots(spec: &InsightSpec, probe: &Probe) -> Vec<PathBuf> {
         && let Ok(path) = String::from_utf8(output.stdout)
     {
         let path = PathBuf::from(path.trim());
-        if path.is_absolute() {
+        if allowed_pnpm_store(&path, &probe.home) {
             return vec![path];
         }
     }
     expand_roots_with_xdg(spec, &probe.home, probe.xdg_cache_home.as_deref())
+}
+
+fn allowed_pnpm_store(path: &Path, home: &Path) -> bool {
+    if !path.is_absolute() {
+        return false;
+    }
+    let Ok(path) = fs::canonicalize(path) else {
+        return false;
+    };
+    let Ok(home) = fs::canonicalize(home) else {
+        return false;
+    };
+    [
+        home.join("Library/pnpm/store"),
+        home.join(".local/share/pnpm/store"),
+        home.join(".pnpm-store"),
+    ]
+    .iter()
+    .any(|root| path.starts_with(root))
 }
 
 fn enumerate_children(root: &Path) -> Vec<(PathBuf, SystemTime)> {
@@ -187,6 +206,22 @@ mod tests {
         let entries = enumerate_children(fixture.path());
         assert_eq!(entries.len(), 1);
         assert!(entries[0].0.ends_with("recent"));
+    }
+
+    #[test]
+    fn pnpm_store_accepts_only_known_store_roots_below_home() {
+        let fixture = tempdir().unwrap();
+        let store = fixture.path().join("Library/pnpm/store/v10");
+        fs::create_dir_all(&store).unwrap();
+        let documents = fixture.path().join("Documents");
+        fs::create_dir(&documents).unwrap();
+
+        assert!(allowed_pnpm_store(&store, fixture.path()));
+        assert!(!allowed_pnpm_store(&documents, fixture.path()));
+        assert!(!allowed_pnpm_store(
+            Path::new("relative/store"),
+            fixture.path()
+        ));
     }
 
     #[test]

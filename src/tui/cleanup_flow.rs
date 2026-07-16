@@ -246,34 +246,49 @@ impl CleanupFlow {
                     .first()
                     .map(|item| item.path.clone())
                     .unwrap_or_default();
+                let failure_path = first_path.clone();
                 let (sender, report) = mpsc::channel();
-                tokio::task::spawn_blocking(move || {
+                tokio::spawn(async move {
                     if items.iter().any(|item| item.policy.stop_gradle) {
-                        let _ = std::process::Command::new("gradle").arg("--stop").status();
+                        let _ =
+                            crate::tui::app::run_tasks_headless(vec![crate::tui::TaskDef::new(
+                                "Stopping Gradle daemon",
+                                "gradle",
+                                &["--stop"],
+                            )])
+                            .await;
                     }
-                    let mut report = DeleteReport::default();
-                    let mut running = HashMap::new();
-                    for item in items {
-                        let plan = DeletePlan {
-                            items: vec![item.path],
-                            mode,
-                            dry_run,
-                        };
-                        let blocked = item.policy.skip_if_running.is_some_and(|name| {
-                            *running
-                                .entry(name)
-                                .or_insert_with(|| is_process_running(name))
-                        });
-                        let item_report = if blocked {
-                            execute_skipped(&plan, "App is running")
-                        } else {
-                            execute(&plan)
-                        };
-                        report.removed.extend(item_report.removed);
-                        report.failed.extend(item_report.failed);
-                        report.skipped.extend(item_report.skipped);
-                        report.log_errors.extend(item_report.log_errors);
-                    }
+                    let report = tokio::task::spawn_blocking(move || {
+                        let mut report = DeleteReport::default();
+                        let mut running = HashMap::new();
+                        for item in items {
+                            let plan = DeletePlan {
+                                items: vec![item.path],
+                                mode,
+                                dry_run,
+                            };
+                            let blocked = item.policy.skip_if_running.is_some_and(|name| {
+                                *running
+                                    .entry(name)
+                                    .or_insert_with(|| is_process_running(name))
+                            });
+                            let item_report = if blocked {
+                                execute_skipped(&plan, "App is running")
+                            } else {
+                                execute(&plan)
+                            };
+                            report.removed.extend(item_report.removed);
+                            report.failed.extend(item_report.failed);
+                            report.skipped.extend(item_report.skipped);
+                            report.log_errors.extend(item_report.log_errors);
+                        }
+                        report
+                    })
+                    .await
+                    .unwrap_or_else(|error| DeleteReport {
+                        failed: vec![(failure_path, error.to_string())],
+                        ..DeleteReport::default()
+                    });
                     let _ = sender.send(report);
                 });
                 self.modals.open(CleanupModal::Deleting {

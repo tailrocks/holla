@@ -452,10 +452,17 @@ mod tests {
             "Library/Keychains/login.keychain-db",
             "Library/Application Support/Google/Chrome/Profile 1",
             "Library/Safari/History.db",
+            "Library/WebKit/com.apple.Safari/WebsiteData/file",
+            "Library/Containers/com.apple.Safari/Data/Library/Safari/History.db",
+            "Library/Group Containers/group.com.google.Chrome/Profile 1/History",
             "Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw",
         ] {
             let path = home.join(relative);
             assert!(validate(&path).is_err(), "{}", path.display());
         }
+        assert!(
+            validate(&home.join("Library/Caches/com.google.Chrome/cache-entry")).is_ok(),
+            "browser cache bundle descendants remain eligible"
+        );
     }
 }
