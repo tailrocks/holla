@@ -1,6 +1,6 @@
 use crate::{
     du::{NodeId, NodeState, ScanEvent, ScanHandle, ScanOptions, ScanTree, SortKey, scan},
-    tui::cleanup_flow::{CleanupFlow, CleanupItem, CleanupPolicy, CleanupPoll},
+    tui::cleanup_flow::{CleanupFlow, CleanupItem, CleanupPoll},
 };
 use crossterm::event::{self, Event, KeyEventKind};
 use humansize::{DECIMAL, format_size};
@@ -273,7 +273,7 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 KeyCode::Char('d') | KeyCode::Backspace => {
                     let items = selected_items(&handle, &tree_state, &root);
                     if !items.is_empty() {
-                        cleanup.open_confirmation(items, CleanupPolicy::default());
+                        cleanup.open_confirmation(items);
                     }
                 }
                 KeyCode::Char('f') => folding = !folding,
@@ -471,10 +471,7 @@ fn selected_items(handle: &ScanHandle, state: &TreeState<NodeId>, root: &Path) -
     effective_selection(&tree, checked)
         .0
         .into_iter()
-        .map(|id| CleanupItem {
-            path: node_path(&tree, root, id),
-            size: tree.node(id).on_disk,
-        })
+        .map(|id| CleanupItem::new(node_path(&tree, root, id), tree.node(id).on_disk))
         .collect()
 }
 

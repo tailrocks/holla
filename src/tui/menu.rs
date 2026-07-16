@@ -599,10 +599,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_probe_still_builds_disk_group() {
+    fn empty_probe_still_builds_disk_and_cleanup_groups() {
         let menu = menu(&Probe::empty());
-        assert_eq!(menu.groups.len(), 1);
+        assert_eq!(menu.groups.len(), 2);
         assert_eq!(menu.groups[0].id, "disk");
+        assert_eq!(menu.groups[1].id, "cleanup");
     }
 
     #[test]
@@ -613,6 +614,7 @@ mod tests {
 
         assert!(labels(&menu, "System").contains(&"docker: stop all containers"));
         assert!(labels(&menu, "System").contains(&"docker: clean everything"));
+        assert!(labels(&menu, "System").contains(&"docker: prune builder cache"));
     }
 
     #[test]

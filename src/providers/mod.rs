@@ -2,6 +2,7 @@ mod current_folder;
 mod disk;
 mod docker;
 mod gradle;
+mod insights;
 mod repos;
 mod system;
 
@@ -23,6 +24,7 @@ pub fn all_providers() -> Vec<Box<dyn Provider>> {
         Box::new(system::SystemProvider),
         Box::new(docker::DockerProvider),
         Box::new(gradle::GradleProvider),
+        Box::new(insights::InsightsProvider),
     ]
 }
 
@@ -72,6 +74,7 @@ pub fn groups_from_probe(probe: &Probe) -> Vec<GroupSpec> {
         system::group(probe),
         docker::group(probe),
         gradle::group(probe),
+        Some(insights::group(&[])),
     ]
     .into_iter()
     .flatten()

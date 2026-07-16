@@ -22,6 +22,22 @@ use crate::{
 pub struct CleanupItem {
     pub path: PathBuf,
     pub size: u64,
+    pub policy: CleanupPolicy,
+}
+
+impl CleanupItem {
+    pub fn new(path: PathBuf, size: u64) -> Self {
+        Self {
+            path,
+            size,
+            policy: CleanupPolicy::default(),
+        }
+    }
+
+    pub fn with_policy(mut self, policy: CleanupPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -57,7 +73,6 @@ enum CleanupModal {
         total: u64,
         mode: DeleteMode,
         dry_run: bool,
-        policy: CleanupPolicy,
         state: ChoiceDialogState<DeleteChoice>,
     },
     Deleting {
@@ -97,7 +112,8 @@ impl CleanupFlow {
         self.modals.is_open()
     }
 
-    pub fn open_confirmation(&mut self, items: Vec<CleanupItem>, policy: CleanupPolicy) {
+    pub fn open_confirmation(&mut self, items: Vec<CleanupItem>) {
+        let items = deduplicate_items(items);
         let total = items
             .iter()
             .fold(0_u64, |sum, item| sum.saturating_add(item.size));
@@ -106,7 +122,6 @@ impl CleanupFlow {
             total,
             mode: DeleteMode::Trash,
             dry_run: false,
-            policy,
             state: ChoiceDialogState::new(Some(DeleteChoice::Cancel)),
         });
     }
@@ -150,10 +165,9 @@ impl CleanupFlow {
             Close,
             OpenQuit,
             Start {
-                items: Vec<PathBuf>,
+                items: Vec<CleanupItem>,
                 mode: DeleteMode,
                 dry_run: bool,
-                policy: CleanupPolicy,
             },
             ExitAfterDelete,
         }
@@ -163,7 +177,6 @@ impl CleanupFlow {
                 items,
                 mode,
                 dry_run,
-                policy,
                 state,
                 ..
             }) => {
@@ -182,10 +195,9 @@ impl CleanupFlow {
                             Effect::Close
                         }
                         Outcome::Activated(DeleteChoice::Delete) => Effect::Start {
-                            items: items.iter().map(|item| item.path.clone()).collect(),
+                            items: items.clone(),
                             mode: *mode,
                             dry_run: *dry_run,
-                            policy: *policy,
                         },
                         Outcome::Ignored | Outcome::Changed => Effect::None,
                         _ => Effect::None,
@@ -229,24 +241,34 @@ impl CleanupFlow {
                 items,
                 mode,
                 dry_run,
-                policy,
             } => {
-                let first_path = items.first().cloned().unwrap_or_default();
-                let plan = DeletePlan {
-                    items,
-                    mode,
-                    dry_run,
-                };
+                let first_path = items
+                    .first()
+                    .map(|item| item.path.clone())
+                    .unwrap_or_default();
                 let (sender, report) = mpsc::channel();
                 tokio::task::spawn_blocking(move || {
-                    if policy.stop_gradle {
+                    if items.iter().any(|item| item.policy.stop_gradle) {
                         let _ = std::process::Command::new("gradle").arg("--stop").status();
                     }
-                    let report = if policy.skip_if_running.is_some_and(is_process_running) {
-                        execute_skipped(&plan, "App is running")
-                    } else {
-                        execute(&plan)
-                    };
+                    let mut report = DeleteReport::default();
+                    for item in items {
+                        let plan = DeletePlan {
+                            items: vec![item.path],
+                            mode,
+                            dry_run,
+                        };
+                        let item_report =
+                            if item.policy.skip_if_running.is_some_and(is_process_running) {
+                                execute_skipped(&plan, "App is running")
+                            } else {
+                                execute(&plan)
+                            };
+                        report.removed.extend(item_report.removed);
+                        report.failed.extend(item_report.failed);
+                        report.skipped.extend(item_report.skipped);
+                        report.log_errors.extend(item_report.log_errors);
+                    }
                     let _ = sender.send(report);
                 });
                 self.modals.open(CleanupModal::Deleting {
@@ -287,6 +309,27 @@ impl CleanupFlow {
             } => render_report(frame, theme, report, *mode, state),
         }
     }
+}
+
+fn deduplicate_items(mut items: Vec<CleanupItem>) -> Vec<CleanupItem> {
+    items.sort_by(|left, right| {
+        left.path
+            .components()
+            .count()
+            .cmp(&right.path.components().count())
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let mut effective: Vec<CleanupItem> = Vec::new();
+    for item in items {
+        if effective
+            .iter()
+            .any(|ancestor| item.path == ancestor.path || item.path.starts_with(&ancestor.path))
+        {
+            continue;
+        }
+        effective.push(item);
+    }
+    effective
 }
 
 fn delete_actions() -> [DialogAction<'static, DeleteChoice>; 2] {
@@ -634,7 +677,7 @@ mod tests {
     #[test]
     fn confirmation_defaults_to_trash_cancel_and_live_mode() {
         let mut flow = CleanupFlow::new();
-        flow.open_confirmation(Vec::new(), CleanupPolicy::default());
+        flow.open_confirmation(Vec::new());
         let Some(CleanupModal::Confirm {
             mode,
             dry_run,
@@ -652,7 +695,7 @@ mod tests {
     #[test]
     fn escape_closes_confirmation_without_deleting() {
         let mut flow = CleanupFlow::new();
-        flow.open_confirmation(Vec::new(), CleanupPolicy::default());
+        flow.open_confirmation(Vec::new());
         flow.handle_key(key(KeyCode::Esc));
         assert!(!flow.is_open());
     }
@@ -660,7 +703,7 @@ mod tests {
     #[test]
     fn permanent_and_dry_run_require_explicit_toggles() {
         let mut flow = CleanupFlow::new();
-        flow.open_confirmation(Vec::new(), CleanupPolicy::default());
+        flow.open_confirmation(Vec::new());
         flow.handle_key(key(KeyCode::Char('p')));
         flow.handle_key(key(KeyCode::Char('n')));
         let Some(CleanupModal::Confirm { mode, dry_run, .. }) = flow.modals.current_mut() else {

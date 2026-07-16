@@ -12,11 +12,18 @@ impl Provider for DockerProvider {
     }
 
     fn scan(&self) -> Option<GroupSpec> {
-        group(&Probe::docker())
+        let probe = Probe::docker();
+        let preview = docker_size_preview();
+        group_with_preview(&probe, preview.as_deref())
     }
 }
 
+#[cfg(test)]
 pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
+    group_with_preview(probe, None)
+}
+
+fn group_with_preview(probe: &Probe, size_preview: Option<&str>) -> Option<GroupSpec> {
     probe.docker.then(|| GroupSpec {
         id: "system",
         title: "System".into(),
@@ -39,6 +46,30 @@ pub(super) fn group(probe: &Probe) -> Option<GroupSpec> {
                 Danger::Destructive,
                 || Box::pin(crate::commands::docker::clean()),
             ),
+            ActionSpec::new(
+                "docker.builder-prune",
+                "docker: prune builder cache",
+                "Review Docker disk accounting, then remove unused builder cache",
+                size_preview.map_or_else(
+                    || "$ docker system df\n$ docker builder prune -f".to_owned(),
+                    |output| format!("$ docker system df\n{output}\n$ docker builder prune -f"),
+                ),
+                &["cleanup", "docker", "builder", "cache", "disk"],
+                Danger::Destructive,
+                || Box::pin(crate::commands::docker::builder_prune()),
+            ),
         ],
     })
+}
+
+fn docker_size_preview() -> Option<String> {
+    let output = std::process::Command::new("docker")
+        .args(["system", "df"])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|output| !output.is_empty())
 }

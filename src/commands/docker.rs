@@ -52,6 +52,15 @@ pub async fn clean() -> anyhow::Result<()> {
     .await
 }
 
+pub async fn builder_prune() -> anyhow::Result<()> {
+    run_tasks(vec![TaskDef::new(
+        "Pruning Docker builder cache",
+        "docker",
+        &["builder", "prune", "-f"],
+    )])
+    .await
+}
+
 async fn list_containers() -> anyhow::Result<Vec<String>> {
     let out = tokio::process::Command::new("docker")
         .args(["ps", "-qa"])
