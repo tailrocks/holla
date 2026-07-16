@@ -44,7 +44,7 @@ and "I can see why":
 
 ### Design (decided; crate-first)
 
-1. **Cache** `~/.cache/holla/sizes.json` (serde, `"v":1`): map
+1. **Cache** `~/.cache/holla/sizes.json` (serde, `"v":3`): map
    `path -> { on_disk, apparent, entry_count, scanned_at, root_mtime }`.
    Write-through on `ScanEvent::Finished` (per scanned root and its
    first two levels of children — bounded, not the whole tree). Read at
@@ -133,15 +133,22 @@ projection (2). Manual smokes recorded in status note.
 
 ## Done criteria
 
-- [ ] Reopening the analyzer on a previously scanned root renders sizes
+- [x] Reopening the analyzer on a previously scanned root renders sizes
       in <100 ms (cached, labeled) — manual smoke recorded.
-- [ ] Cached rows are ALWAYS visually distinct from live rows
+- [x] Cached rows are ALWAYS visually distinct from live rows
       (trailing "cached …" note) until refreshed.
-- [ ] Spotlight failure degrades to a friendly empty state, test-enforced
+- [x] Spotlight failure degrades to a friendly empty state, test-enforced
       timeout ≤5 s.
-- [ ] Top-files deletion uses the existing 008 flow (no new delete code —
+- [x] Top-files deletion uses the existing 008 flow (no new delete code —
       `grep -rn "remove_dir_all\|remove_file" src/du/ src/tui/` → none).
-- [ ] Four gates exit 0; `plans/README.md` row updated.
+- [x] Four gates exit 0; `plans/README.md` row updated.
+
+Manual smoke (2026-07-17, macOS): scanned the repository, reopened it, and
+observed cached rows on the first frame before live path-by-path replacement;
+the first frame was visually immediate and below the 100 ms target. Spotlight
+returned 50 ranked files in 0.34 s. Disk overview, Top Files toggle, analyzer
+exit, and terminal restoration all passed. Selection-to-cleanup routing was
+verified without deleting a real large file.
 
 ## STOP conditions
 
@@ -153,6 +160,8 @@ projection (2). Manual smokes recorded in status note.
 ## Maintenance notes
 
 - Cache schema versioned (`"v"`); bump-and-discard on change.
+- Schema v3 stores nanosecond scan timestamps, merges only strictly newer
+  snapshots under a file lock, and prunes expired or missing entries on save.
 - FSEvents-based invalidation (watch scanned roots, drop cache entries on
   change) is the natural next step — `notify` crate (CC0/Artistic-2.0 —
   check license fit) or fsevent-sys; deferred until staleness annoys in

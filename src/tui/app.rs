@@ -652,6 +652,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
             frame.render_stateful_widget(
                 &Viewport::new(&output_lines, &theme)
                     .title(tasks[selected].label.as_str())
+                    .emphasis(PanelEmphasis::Focused)
                     .content_style(theme.style(Role::Text)),
                 output_area,
                 &mut viewport_state,

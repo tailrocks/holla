@@ -1,9 +1,11 @@
 use crate::{
     du::{
         NodeId, NodeState, ScanEvent, ScanHandle, ScanOptions, ScanTree, SortKey,
-        cache::{CachedSize, SizeCache, snapshot},
+        cache::{CachedSize, SizeBaseline, SizeCache, snapshot},
         scan,
+        spotlight::{self, TopFiles},
     },
+    insights,
     tui::cleanup_flow::{CleanupFlow, CleanupItem, CleanupPoll},
 };
 use crossterm::event::{self, Event, KeyEventKind};
@@ -16,8 +18,12 @@ use ratatui::{
 };
 use std::{
     collections::{HashMap, HashSet},
+    fs,
     path::{Path, PathBuf},
-    sync::atomic::Ordering,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use termrock::{
@@ -25,9 +31,9 @@ use termrock::{
     layout::centered_rect,
     style::{Role, Theme},
     widgets::{
-        Backdrop, Hint, HintBar, Panel, PanelEmphasis, Progress, ProgressKind, StatusBar,
-        StatusBarState, StatusSlot, TextInput, TextInputOutcome, TextInputState, Tree, TreeNode,
-        TreeNodeStatus, TreeOutcome, TreeState, Validation,
+        Backdrop, Hint, HintBar, List, ListRow, ListState, Panel, PanelEmphasis, Progress,
+        ProgressKind, RowRole, StatusBar, StatusBarState, StatusSlot, TextInput, TextInputOutcome,
+        TextInputState, Tree, TreeNode, TreeNodeStatus, TreeOutcome, TreeState, Validation,
     },
 };
 
@@ -54,7 +60,60 @@ enum HeaderSlot {
     Scan,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AnalyzerView {
+    Tree,
+    TopFiles,
+}
+
+struct OverviewItem {
+    path: PathBuf,
+    label: String,
+    cached: Option<CachedSize>,
+    insight: bool,
+}
+
+enum OverviewChoice {
+    Path(PathBuf),
+    TopFiles,
+}
+
+const OVERVIEW_HINTS: &[Hint<'static>] = &[
+    Hint {
+        chord: "↑↓",
+        label: "navigate",
+        priority: 5,
+        visible: true,
+    },
+    Hint {
+        chord: "enter",
+        label: "analyze",
+        priority: 5,
+        visible: true,
+    },
+    Hint {
+        chord: "T",
+        label: "top files",
+        priority: 5,
+        visible: true,
+    },
+    Hint {
+        chord: "q",
+        label: "back",
+        priority: 5,
+        visible: true,
+    },
+];
+
+const CACHED_ID_BASE: u32 = 1 << 31;
+
 const ANALYZER_HINTS: &[Hint<'static>] = &[
+    Hint {
+        chord: "T",
+        label: "top files",
+        priority: 4,
+        visible: true,
+    },
     Hint {
         chord: "↑↓←→",
         label: "navigate",
@@ -130,7 +189,10 @@ impl CachedProjection {
             .map(|(index, (path, _))| {
                 (
                     path.clone(),
-                    NodeId(u32::try_from(index).expect("cache projection exceeded u32 nodes")),
+                    NodeId(
+                        CACHED_ID_BASE
+                            + u32::try_from(index).expect("cache projection exceeded u32 nodes"),
+                    ),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -138,7 +200,10 @@ impl CachedProjection {
             .into_iter()
             .enumerate()
             .map(|(index, (path, size))| CachedNode {
-                id: NodeId(u32::try_from(index).expect("cache projection exceeded u32 nodes")),
+                id: NodeId(
+                    CACHED_ID_BASE
+                        + u32::try_from(index).expect("cache projection exceeded u32 nodes"),
+                ),
                 parent: path.parent().and_then(|parent| ids.get(parent)).copied(),
                 path,
                 children: Vec::new(),
@@ -148,7 +213,9 @@ impl CachedProjection {
         for index in 0..nodes.len() {
             if let Some(parent) = nodes[index].parent {
                 let id = nodes[index].id;
-                nodes[parent.0 as usize].children.push(id);
+                nodes[(parent.0 - CACHED_ID_BASE) as usize]
+                    .children
+                    .push(id);
             }
         }
         Self { nodes }
@@ -165,6 +232,21 @@ impl CachedProjection {
             .map_or(0, |node| node.size.on_disk)
     }
 
+    #[cfg(test)]
+    fn root_id(&self) -> Option<NodeId> {
+        self.nodes
+            .iter()
+            .find(|node| node.parent.is_none())
+            .map(|node| node.id)
+    }
+
+    #[cfg(test)]
+    fn node(&self, id: NodeId) -> Option<&CachedNode> {
+        let index = id.0.checked_sub(CACHED_ID_BASE)?;
+        self.nodes.get(index as usize)
+    }
+
+    #[cfg(test)]
     fn rows(
         &self,
         expanded: &HashSet<NodeId>,
@@ -178,10 +260,11 @@ impl CachedProjection {
         let mut rows = Vec::new();
         let mut pending = vec![(root.id, 0_u16)];
         while let Some((id, depth)) = pending.pop() {
-            let node = &self.nodes[id.0 as usize];
+            let node = self.node(id).expect("cached row identity");
             let is_expanded = !node.children.is_empty() && expanded.contains(&id);
             let age = now
-                .duration_since(UNIX_EPOCH + Duration::from_secs(node.size.scanned_at))
+                .duration_since(UNIX_EPOCH + Duration::from_nanos(node.size.scanned_at))
+                .map(|duration| Duration::from_secs(duration.as_secs()))
                 .unwrap_or_default();
             rows.push(TreeNode {
                 id,
@@ -210,8 +293,8 @@ impl CachedProjection {
             if is_expanded {
                 let mut children = node.children.clone();
                 children.sort_by(|left, right| {
-                    let left = &self.nodes[left.0 as usize];
-                    let right = &self.nodes[right.0 as usize];
+                    let left = self.node(*left).expect("cached child identity");
+                    let right = self.node(*right).expect("cached child identity");
                     match sort {
                         SortKey::OnDisk => right
                             .size
@@ -236,49 +319,473 @@ impl CachedProjection {
         }
         rows
     }
+}
 
-    fn selected(&self, checked: &[NodeId]) -> (Vec<CleanupItem>, u64) {
-        let checked = checked
+pub async fn overview() -> anyhow::Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("home directory is unavailable"))?;
+    let theme = Theme::tailrocks_phosphor();
+    let items = overview_items(&home, &SizeCache::load(), SystemTime::now());
+    let rows = overview_rows(&items, SystemTime::now(), &theme);
+    let mut state = ListState::new(rows.first().map(|row| row.id));
+    let mut session = termrock::crossterm::Session::enter(
+        std::io::stdout(),
+        termrock::crossterm::SessionOptions::default(),
+    )?;
+    let backend = CrosstermBackend::new(session.writer_mut());
+    let mut terminal = ratatui::Terminal::new(backend)?;
+
+    let choice = 'screen: loop {
+        terminal.draw(|frame| {
+            let [header_area, list_area, copy_area, hints_area] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .areas(frame.area());
+            frame.render_widget(
+                Paragraph::new("Disk overview").style(theme.style(Role::Accent)),
+                header_area,
+            );
+            let panel = Panel::new(&theme)
+                .title(" Places to inspect ")
+                .emphasis(PanelEmphasis::Focused);
+            let inner = panel.inner(list_area);
+            frame.render_widget(&panel, list_area);
+            if rows.is_empty() {
+                frame.render_widget(
+                    Paragraph::new("No home directories found").style(theme.style(Role::TextMuted)),
+                    inner,
+                );
+            } else {
+                frame.render_stateful_widget(&List::new(&rows, &theme), inner, &mut state);
+            }
+            frame.render_widget(
+                Paragraph::new("Cached sizes are labeled; selecting any row starts a live scan")
+                    .style(theme.style(Role::TextMuted)),
+                copy_area,
+            );
+            frame.render_widget(
+                HintBar::new(OVERVIEW_HINTS, &theme).separator(" · "),
+                hints_area,
+            );
+        })?;
+
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            let key = termrock::input::KeyEvent::from(key);
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => break 'screen None,
+                KeyCode::Char('T' | 't') => break 'screen Some(OverviewChoice::TopFiles),
+                _ => {
+                    if let termrock::interaction::Outcome::Activated(id) =
+                        state.handle_key(&rows, key)
+                    {
+                        break 'screen Some(OverviewChoice::Path(items[id].path.clone()));
+                    }
+                }
+            }
+        }
+    };
+
+    drop(terminal);
+    session.restore()?;
+    match choice {
+        Some(OverviewChoice::Path(path)) => run(path).await,
+        Some(OverviewChoice::TopFiles) => run_with_view(home, AnalyzerView::TopFiles).await,
+        None => Ok(()),
+    }
+}
+
+fn overview_items(home: &Path, cache: &SizeCache, now: SystemTime) -> Vec<OverviewItem> {
+    let mut home_paths = fs::read_dir(home)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    home_paths.sort();
+    let mut items = home_paths
+        .into_iter()
+        .map(|path| OverviewItem {
+            label: path
+                .file_name()
+                .unwrap_or_else(|| path.as_os_str())
+                .to_string_lossy()
+                .into_owned(),
+            cached: cache.valid(&path, now).cloned(),
+            path,
+            insight: false,
+        })
+        .collect::<Vec<_>>();
+
+    if let Some(probe) = insights::Probe::current() {
+        let mut seen = HashSet::new();
+        for spec in insights::REGISTRY
             .iter()
-            .filter_map(|id| self.nodes.get(id.0 as usize))
-            .collect::<Vec<_>>();
-        let mut effective = checked
-            .iter()
-            .filter(|node| {
-                !checked
+            .filter(|spec| insights::detect(spec, &probe))
+        {
+            for path in
+                insights::expand_roots_with_xdg(spec, &probe.home, probe.xdg_cache_home.as_deref())
+                    .into_iter()
+                    .filter(|path| path.is_dir())
+                    .filter(|path| seen.insert(path.clone()))
+            {
+                items.push(OverviewItem {
+                    label: format!("{} · {}", spec.title, path.display()),
+                    cached: cache.valid(&path, now).cloned(),
+                    path,
+                    insight: true,
+                });
+            }
+        }
+    }
+    items
+}
+
+fn overview_rows(
+    items: &[OverviewItem],
+    now: SystemTime,
+    theme: &Theme,
+) -> Vec<ListRow<'static, usize>> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(id, item)| {
+            let trailing = item.cached.as_ref().map_or_else(
+                || "not scanned yet".to_owned(),
+                |cached| {
+                    let age = now
+                        .duration_since(UNIX_EPOCH + Duration::from_nanos(cached.scanned_at))
+                        .map(|duration| Duration::from_secs(duration.as_secs()))
+                        .unwrap_or_default();
+                    format!(
+                        "{} · cached {} ago",
+                        format_size(cached.on_disk, DECIMAL),
+                        humantime::format_duration(age)
+                    )
+                },
+            );
+            ListRow {
+                id,
+                label: Line::styled(
+                    item.label.clone(),
+                    theme.style(if item.insight {
+                        Role::Accent
+                    } else {
+                        Role::Text
+                    }),
+                ),
+                trailing: Some(Line::styled(trailing, theme.style(Role::TextMuted))),
+                role: RowRole::Item,
+                enabled: true,
+            }
+        })
+        .collect()
+}
+
+struct MergedProjection {
+    rows: Vec<TreeNode<'static, PathBuf>>,
+    sizes: HashMap<PathBuf, u64>,
+}
+
+struct DisplayNode {
+    path: PathBuf,
+    on_disk: u64,
+    apparent: u64,
+    state: NodeState,
+    is_dir: bool,
+    cached_at: Option<u64>,
+}
+
+struct ProjectionOptions {
+    cache_active: bool,
+    folding: bool,
+    sort: SortKey,
+    now: SystemTime,
+}
+
+fn merged_projection(
+    root: &Path,
+    tree: Option<&ScanTree>,
+    cached: &CachedProjection,
+    expanded: &HashSet<PathBuf>,
+    options: ProjectionOptions,
+    theme: &Theme,
+) -> MergedProjection {
+    let mut nodes = HashMap::<PathBuf, DisplayNode>::new();
+    if options.cache_active {
+        nodes.extend(cached.nodes.iter().map(|node| {
+            (
+                node.path.clone(),
+                DisplayNode {
+                    path: node.path.clone(),
+                    on_disk: node.size.on_disk,
+                    apparent: node.size.apparent,
+                    state: NodeState::Done,
+                    is_dir: !node.children.is_empty() || node.path == root,
+                    cached_at: Some(node.size.scanned_at),
+                },
+            )
+        }));
+    }
+    if let Some(tree) = tree {
+        for (index, node) in tree.nodes().iter().enumerate() {
+            let id = NodeId(u32::try_from(index).expect("scan tree exceeded u32 nodes"));
+            let path = node_path(tree, root, id);
+            let fresh = node.state != NodeState::Scanning || node.on_disk > 0;
+            if fresh || !nodes.contains_key(&path) {
+                nodes.insert(
+                    path.clone(),
+                    DisplayNode {
+                        path,
+                        on_disk: node.on_disk,
+                        apparent: node.apparent,
+                        state: node.state,
+                        is_dir: node.is_dir,
+                        cached_at: None,
+                    },
+                );
+            }
+        }
+    }
+
+    let mut children = HashMap::<PathBuf, Vec<PathBuf>>::new();
+    for path in nodes.keys().filter(|path| path.as_path() != root) {
+        if let Some(parent) = path.parent().filter(|parent| nodes.contains_key(*parent)) {
+            children
+                .entry(parent.to_path_buf())
+                .or_default()
+                .push(path.clone());
+        }
+    }
+    for paths in children.values_mut() {
+        paths.sort_by(|left, right| {
+            let left_node = &nodes[left];
+            let right_node = &nodes[right];
+            match options.sort {
+                SortKey::OnDisk => right_node
+                    .on_disk
+                    .cmp(&left_node.on_disk)
+                    .then_with(|| left.cmp(right)),
+                SortKey::Apparent => right_node
+                    .apparent
+                    .cmp(&left_node.apparent)
+                    .then_with(|| left.cmp(right)),
+                SortKey::Name => left.cmp(right),
+            }
+        });
+    }
+
+    let mut rows = Vec::new();
+    let mut pending = nodes
+        .contains_key(root)
+        .then(|| (root.to_path_buf(), 0_u16))
+        .into_iter()
+        .collect::<Vec<_>>();
+    while let Some((path, depth)) = pending.pop() {
+        let node = &nodes[&path];
+        let name = path
+            .file_name()
+            .unwrap_or_else(|| path.as_os_str())
+            .to_string_lossy();
+        let folded = options.folding && node.is_dir && FOLD_SET.contains(&name.as_ref());
+        let node_children = children.get(&path).map(Vec::as_slice).unwrap_or_default();
+        let branch = node.is_dir && !folded && !node_children.is_empty();
+        let is_expanded = branch && expanded.contains(&path);
+        let label = if folded {
+            format!("{name} (folded)")
+        } else {
+            name.into_owned()
+        };
+        let (label, trailing) = if let Some(scanned_at) = node.cached_at {
+            let age = options
+                .now
+                .duration_since(UNIX_EPOCH + Duration::from_nanos(scanned_at))
+                .map(|duration| Duration::from_secs(duration.as_secs()))
+                .unwrap_or_default();
+            (
+                Line::styled(label, theme.style(Role::TextMuted)),
+                Line::styled(
+                    format!(
+                        "{} · cached {} ago",
+                        format_size(node.on_disk, DECIMAL),
+                        humantime::format_duration(age)
+                    ),
+                    theme.style(Role::TextMuted),
+                ),
+            )
+        } else {
+            let percentage = path.parent().and_then(|parent| {
+                let total = nodes.get(parent)?.on_disk;
+                (total > 0).then(|| (node.on_disk as f64 / total as f64) * 100.0)
+            });
+            (
+                Line::from(label),
+                Line::from(percentage.map_or_else(
+                    || format_size(node.on_disk, DECIMAL),
+                    |percentage| {
+                        format!(
+                            "{} · {:.0}%",
+                            format_size(node.on_disk, DECIMAL),
+                            percentage
+                        )
+                    },
+                )),
+            )
+        };
+        rows.push(TreeNode {
+            id: path.clone(),
+            label,
+            trailing: Some(trailing),
+            depth,
+            branch,
+            expanded: is_expanded,
+            enabled: true,
+            status: match node.state {
+                NodeState::Scanning => TreeNodeStatus::Loading,
+                NodeState::Done => TreeNodeStatus::Ready,
+                NodeState::Errored(_) => TreeNodeStatus::Error,
+            },
+        });
+        if is_expanded {
+            pending.extend(
+                node_children
                     .iter()
-                    .any(|other| other.id != node.id && node.path.starts_with(&other.path))
-            })
-            .map(|node| CleanupItem::new(node.path.clone(), node.size.on_disk))
-            .collect::<Vec<_>>();
-        effective.sort_by(|left, right| left.path.cmp(&right.path));
-        let bytes = effective
+                    .rev()
+                    .cloned()
+                    .map(|child| (child, depth.saturating_add(1))),
+            );
+        }
+    }
+    MergedProjection {
+        rows,
+        sizes: nodes
+            .into_values()
+            .map(|node| (node.path, node.on_disk))
+            .collect(),
+    }
+}
+
+fn selected_projection_items(
+    projection: &MergedProjection,
+    checked: &[PathBuf],
+) -> Vec<CleanupItem> {
+    let mut items = checked
+        .iter()
+        .filter_map(|path| {
+            projection
+                .sizes
+                .get(path)
+                .map(|size| CleanupItem::new(path.clone(), *size))
+        })
+        .filter(|item| {
+            !checked
+                .iter()
+                .any(|other| other != &item.path && item.path.starts_with(other))
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| left.path.cmp(&right.path));
+    items
+}
+
+fn reconcile_tree_state(
+    state: &mut TreeState<PathBuf>,
+    rows: &[TreeNode<'_, PathBuf>],
+    identities: &HashMap<PathBuf, u64>,
+) {
+    let visible = rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<HashSet<_>>();
+    if state.selected().is_none_or(|id| !visible.contains(id)) {
+        state.select(rows.first().map(|row| row.id.clone()));
+    }
+    if let Some(selection) = state.selection_mut() {
+        let retained = selection
+            .checked()
             .iter()
-            .fold(0_u64, |total, item| total.saturating_add(item.size));
-        (effective, bytes)
+            .filter(|id| identities.contains_key(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        selection.clear();
+        for id in retained {
+            selection.toggle(&id);
+        }
     }
 }
 
 pub async fn run(root: PathBuf) -> anyhow::Result<()> {
+    run_with_view(root, AnalyzerView::Tree).await
+}
+
+struct BaselineTask {
+    cancel: Arc<AtomicBool>,
+    join: Option<tokio::task::JoinHandle<SizeBaseline>>,
+}
+
+impl BaselineTask {
+    fn is_finished(&self) -> bool {
+        self.join
+            .as_ref()
+            .is_none_or(tokio::task::JoinHandle::is_finished)
+    }
+}
+
+impl Drop for BaselineTask {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+}
+
+fn capture_baseline(root: &Path) -> BaselineTask {
+    let root = root.to_path_buf();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = Arc::clone(&cancel);
+    let join = tokio::task::spawn_blocking(move || {
+        SizeBaseline::capture_cancellable(&root, &worker_cancel)
+    });
+    BaselineTask {
+        cancel,
+        join: Some(join),
+    }
+}
+
+async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Result<()> {
     let theme = Theme::tailrocks_phosphor();
     let now = SystemTime::now();
     let cached = CachedProjection::new(&root, SizeCache::load().valid_below(&root, now));
-    let mut showing_cache = !cached.is_empty();
+    let mut cache_active = !cached.is_empty();
     let mut first_frame = true;
-    let mut handle = scan(ScanOptions::new(&root));
-    let mut expanded = HashSet::from([NodeId(0)]);
+    let mut view = initial_view;
+    let mut handle: Option<ScanHandle> = None;
+    let mut size_baseline: Option<SizeBaseline> = None;
+    let mut baseline_task = None;
+    let mut expanded = HashSet::from([root.clone()]);
     let mut folding = true;
     let mut sort = SortKey::OnDisk;
-    let mut tree_state = TreeState::new(Some(NodeId(0)));
+    let mut tree_state = TreeState::new(Some(root.clone()));
     tree_state.enable_multi_select();
     let mut status_state = StatusBarState::default();
-    let mut scanning = true;
+    let mut scanning = handle.is_some();
     let mut bytes_seen = 0_u64;
     let mut inaccessible = 0_u64;
     let mut tick = 0_u64;
     let mut cleanup = CleanupFlow::new();
     let mut cache_write_started = false;
     let mut cache_writes = Vec::new();
+    let mut top_files = None;
+    let mut spotlight_task = None;
+    let mut top_state = ListState::new(None);
+    top_state.enable_multi_select();
+    if view == AnalyzerView::TopFiles {
+        spotlight_task = Some(tokio::spawn(spotlight::discover()));
+    }
     let root_label = root.display().to_string();
 
     let mut session = termrock::crossterm::Session::enter(
@@ -289,37 +796,73 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     'screen: loop {
+        if baseline_task
+            .as_ref()
+            .is_some_and(BaselineTask::is_finished)
+        {
+            let mut completed = baseline_task.take().expect("finished baseline task");
+            size_baseline = completed
+                .join
+                .take()
+                .expect("baseline task has a worker")
+                .await
+                .ok();
+        }
+        if view == AnalyzerView::Tree && handle.is_none() && size_baseline.is_some() {
+            handle = Some(scan(ScanOptions::new(&root)));
+            scanning = true;
+            first_frame = true;
+        }
         match cleanup.poll() {
             CleanupPoll::Exit => break 'screen,
             CleanupPoll::Completed => {
-                handle.cancel.store(true, Ordering::Release);
-                handle = scan(ScanOptions::new(&root));
-                showing_cache = false;
-                expanded = HashSet::from([NodeId(0)]);
-                tree_state = TreeState::new(Some(NodeId(0)));
+                let restart_tree = view == AnalyzerView::Tree
+                    || handle.is_some()
+                    || baseline_task.is_some()
+                    || size_baseline.is_some();
+                if let Some(handle) = handle.as_ref() {
+                    handle.cancel.store(true, Ordering::Release);
+                }
+                handle = None;
+                size_baseline = None;
+                baseline_task = restart_tree.then(|| capture_baseline(&root));
+                cache_active = false;
+                expanded = HashSet::from([root.clone()]);
+                tree_state = TreeState::new(Some(root.clone()));
                 tree_state.enable_multi_select();
-                scanning = true;
+                scanning = handle.is_some();
                 bytes_seen = 0;
                 inaccessible = 0;
                 cache_write_started = false;
+                if view == AnalyzerView::TopFiles {
+                    top_files = None;
+                    spotlight_task = Some(tokio::spawn(spotlight::discover()));
+                    top_state = ListState::new(None);
+                    top_state.enable_multi_select();
+                }
             }
             CleanupPoll::None => {}
         }
         let drain = if first_frame {
             DrainResult::default()
         } else {
-            drain_scan_events(&handle, &mut scanning, &mut bytes_seen, &mut inaccessible)
+            handle.as_ref().map_or_else(DrainResult::default, |handle| {
+                drain_scan_events(handle, &mut scanning, &mut bytes_seen, &mut inaccessible)
+            })
         };
-        if showing_cache && drain.material_changed {
-            showing_cache = false;
-            expanded = HashSet::from([NodeId(0)]);
-            tree_state = TreeState::new(Some(NodeId(0)));
-            tree_state.enable_multi_select();
+        if drain.finished {
+            cache_active = false;
         }
         if drain.finished && !cache_write_started {
             let snapshot = {
+                let handle = handle.as_ref().expect("finished scan has a handle");
                 let tree = handle.tree.read().expect("disk scan tree lock");
-                snapshot(&root, &tree, SystemTime::now())
+                snapshot(
+                    &root,
+                    &tree,
+                    SystemTime::now(),
+                    size_baseline.as_ref().expect("scan has a size baseline"),
+                )
             };
             cache_write_started = true;
             let writer = std::thread::Builder::new()
@@ -333,37 +876,76 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 })?;
             cache_writes.push(writer);
         }
-        let (rows, root_bytes, selected_count, selected_bytes) = if showing_cache {
-            let checked = tree_state
-                .selection()
-                .map(|selection| selection.checked())
-                .unwrap_or_default();
-            let (items, selected_bytes) = cached.selected(checked);
-            (
-                cached.rows(&expanded, sort, SystemTime::now(), &theme),
-                cached.root_bytes(),
-                items.len(),
-                selected_bytes,
+        if spotlight_task
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+        {
+            top_files = Some(
+                spotlight_task
+                    .take()
+                    .expect("finished Spotlight task")
+                    .await
+                    .unwrap_or(TopFiles::Unavailable),
+            );
+        }
+        let projection = if let Some(handle) = handle.as_ref() {
+            let tree = handle.tree.read().expect("disk scan tree lock");
+            merged_projection(
+                &root,
+                Some(&tree),
+                &cached,
+                &expanded,
+                ProjectionOptions {
+                    cache_active,
+                    folding,
+                    sort,
+                    now: SystemTime::now(),
+                },
+                &theme,
             )
         } else {
-            let tree = handle.tree.read().expect("disk scan tree lock");
-            let checked = tree_state
-                .selection()
-                .map(|selection| selection.checked())
-                .unwrap_or_default();
-            let (effective, selected_bytes) = effective_selection(&tree, checked);
-            (
-                project_tree(&tree, &expanded, folding, sort),
-                tree.node(tree.root()).on_disk,
-                effective.len(),
-                selected_bytes,
+            merged_projection(
+                &root,
+                None,
+                &cached,
+                &expanded,
+                ProjectionOptions {
+                    cache_active,
+                    folding,
+                    sort,
+                    now: SystemTime::now(),
+                },
+                &theme,
             )
         };
-        if tree_state.selected().is_none() {
-            tree_state.select(rows.first().map(|row| row.id));
+        reconcile_tree_state(&mut tree_state, &projection.rows, &projection.sizes);
+        let checked = tree_state
+            .selection()
+            .map(|selection| selection.checked())
+            .unwrap_or_default();
+        let tree_selected = selected_projection_items(&projection, checked);
+        let tree_selected_bytes = tree_selected
+            .iter()
+            .fold(0_u64, |total, item| total.saturating_add(item.size));
+        let root_bytes = projection.sizes.get(&root).copied().unwrap_or_default();
+        let rows = projection.rows;
+        let top_rows = top_file_rows(top_files.as_ref());
+        if top_state.selected.is_none() {
+            top_state.select(top_rows.first().map(|row| row.id));
         }
+        let (top_selected, top_selected_bytes) = selected_top_files(top_files.as_ref(), &top_state);
+        let (selected_count, selected_bytes) = match view {
+            AnalyzerView::Tree => (tree_selected.len(), tree_selected_bytes),
+            AnalyzerView::TopFiles => (top_selected.len(), top_selected_bytes),
+        };
         let scan_bytes = bytes_seen.max(root_bytes);
-        let scan_copy = if showing_cache {
+        let scan_copy = if view == AnalyzerView::TopFiles {
+            match top_files.as_ref() {
+                None => "searching Spotlight".to_owned(),
+                Some(TopFiles::Available(files)) => format!("{} large files", files.len()),
+                Some(TopFiles::Unavailable) => "Spotlight unavailable".to_owned(),
+            }
+        } else if cache_active {
             format!(
                 "refreshing · cached {}",
                 format_size(cached.root_bytes(), DECIMAL)
@@ -373,23 +955,34 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 "scanning · {} · {inaccessible} unreadable",
                 format_size(scan_bytes, DECIMAL)
             )
+        } else if handle.is_none() {
+            "preparing scan".to_owned()
         } else {
             format!(
                 "complete · {} · {inaccessible} unreadable",
                 format_size(root_bytes, DECIMAL)
             )
         };
-        let selection_copy = format!(
-            "{selected_count} items selected — {} reclaimable · {} · folding {}",
-            format_size(selected_bytes, DECIMAL),
-            match sort {
-                SortKey::OnDisk => "on-disk",
-                SortKey::Apparent => "apparent",
-                SortKey::Name => "name",
-            },
-            if folding { "on" } else { "off" }
-        );
-        let honesty_copy = if inaccessible == 0 {
+        let selection_copy = if view == AnalyzerView::TopFiles {
+            format!(
+                "{selected_count} files selected — {} reclaimable · 100 MB minimum · top 50",
+                format_size(selected_bytes, DECIMAL)
+            )
+        } else {
+            format!(
+                "{selected_count} items selected — {} reclaimable · {} · folding {}",
+                format_size(selected_bytes, DECIMAL),
+                match sort {
+                    SortKey::OnDisk => "on-disk",
+                    SortKey::Apparent => "apparent",
+                    SortKey::Name => "name",
+                },
+                if folding { "on" } else { "off" }
+            )
+        };
+        let honesty_copy = if view == AnalyzerView::TopFiles {
+            "Spotlight index results; sizes rechecked from the filesystem".to_owned()
+        } else if inaccessible == 0 {
             "sizes are on-disk; APFS clones may overcount; purgeable space not included".to_owned()
         } else {
             format!(
@@ -437,24 +1030,68 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
                 header_area,
                 &mut status_state,
             );
-            if scanning {
+            if view == AnalyzerView::TopFiles && top_files.is_none() {
+                frame.render_widget(
+                    Progress::new(ProgressKind::Indeterminate { tick }, &theme)
+                        .label("Searching Spotlight"),
+                    progress_area,
+                );
+            } else if view == AnalyzerView::Tree && scanning {
                 let label = format!("{} scanned", format_size(scan_bytes, DECIMAL));
                 frame.render_widget(
                     Progress::new(ProgressKind::Indeterminate { tick }, &theme).label(&label),
                     progress_area,
                 );
+            } else if view == AnalyzerView::Tree && handle.is_none() {
+                frame.render_widget(
+                    Paragraph::new("Preparing scan").style(theme.style(Role::TextMuted)),
+                    progress_area,
+                );
             } else {
                 frame.render_widget(
-                    Paragraph::new("Scan complete").style(theme.style(Role::Success)),
+                    Paragraph::new(if view == AnalyzerView::TopFiles {
+                        "Spotlight query complete"
+                    } else {
+                        "Scan complete"
+                    })
+                    .style(theme.style(Role::Success)),
                     progress_area,
                 );
             }
             let panel = Panel::new(&theme)
-                .title(" Disk usage ")
+                .title(if view == AnalyzerView::TopFiles {
+                    " Top files "
+                } else {
+                    " Disk usage "
+                })
                 .emphasis(PanelEmphasis::Focused);
             let inner = panel.inner(tree_area);
             frame.render_widget(&panel, tree_area);
-            frame.render_stateful_widget(&Tree::new(&rows, &theme), inner, &mut tree_state);
+            if view == AnalyzerView::Tree {
+                frame.render_stateful_widget(&Tree::new(&rows, &theme), inner, &mut tree_state);
+            } else {
+                match top_files.as_ref() {
+                    Some(TopFiles::Available(files)) if !files.is_empty() => {
+                        frame.render_stateful_widget(
+                            &List::new(&top_rows, &theme),
+                            inner,
+                            &mut top_state,
+                        );
+                    }
+                    Some(TopFiles::Available(_)) => frame
+                        .render_widget(Paragraph::new("No indexed files at least 100 MB"), inner),
+                    Some(TopFiles::Unavailable) => frame.render_widget(
+                        Paragraph::new("Spotlight unavailable — use the tree scan")
+                            .style(theme.style(Role::TextMuted)),
+                        inner,
+                    ),
+                    None => frame.render_widget(
+                        Paragraph::new("Searching the Spotlight index…")
+                            .style(theme.style(Role::TextMuted)),
+                        inner,
+                    ),
+                }
+            }
             frame.render_widget(
                 Paragraph::new(selection_copy.as_str()).style(theme.style(Role::Text)),
                 selection_area,
@@ -474,6 +1111,13 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
 
         first_frame = false;
         tick = tick.wrapping_add(1);
+        if view == AnalyzerView::Tree
+            && handle.is_none()
+            && size_baseline.is_none()
+            && baseline_task.is_none()
+        {
+            baseline_task = Some(capture_baseline(&root));
+        }
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
         {
@@ -487,37 +1131,60 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
             }
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => break 'screen,
+                KeyCode::Char('T' | 't') => {
+                    view = match view {
+                        AnalyzerView::Tree => AnalyzerView::TopFiles,
+                        AnalyzerView::TopFiles => AnalyzerView::Tree,
+                    };
+                    if view == AnalyzerView::TopFiles
+                        && top_files.is_none()
+                        && spotlight_task.is_none()
+                    {
+                        spotlight_task = Some(tokio::spawn(spotlight::discover()));
+                    }
+                    if view == AnalyzerView::Tree
+                        && handle.is_none()
+                        && size_baseline.is_none()
+                        && baseline_task.is_none()
+                    {
+                        baseline_task = Some(capture_baseline(&root));
+                    }
+                }
                 KeyCode::Char('d') | KeyCode::Backspace => {
-                    let items = if showing_cache {
-                        let checked = tree_state
-                            .selection()
-                            .map(|selection| selection.checked())
-                            .unwrap_or_default();
-                        cached.selected(checked).0
+                    let items = if view == AnalyzerView::TopFiles {
+                        selected_top_files(top_files.as_ref(), &top_state).0
                     } else {
-                        selected_items(&handle, &tree_state, &root)
+                        tree_selected.clone()
                     };
                     if !items.is_empty() {
                         cleanup.open_confirmation(items);
                     }
                 }
-                KeyCode::Char('f') => folding = !folding,
-                KeyCode::Char('s') => {
+                KeyCode::Char('f') if view == AnalyzerView::Tree => folding = !folding,
+                KeyCode::Char('s') if view == AnalyzerView::Tree => {
                     sort = match sort {
                         SortKey::OnDisk => SortKey::Apparent,
                         SortKey::Apparent | SortKey::Name => SortKey::OnDisk,
                     };
                 }
-                KeyCode::Char('r') => {
-                    handle.cancel.store(true, Ordering::Release);
-                    handle = scan(ScanOptions::new(&root));
-                    expanded = HashSet::from([NodeId(0)]);
-                    tree_state = TreeState::new(Some(NodeId(0)));
+                KeyCode::Char('r') if view == AnalyzerView::Tree => {
+                    if let Some(handle) = handle.as_ref() {
+                        handle.cancel.store(true, Ordering::Release);
+                    }
+                    handle = None;
+                    size_baseline = None;
+                    baseline_task = Some(capture_baseline(&root));
+                    expanded = HashSet::from([root.clone()]);
+                    tree_state = TreeState::new(Some(root.clone()));
                     tree_state.enable_multi_select();
-                    scanning = true;
+                    scanning = false;
                     bytes_seen = 0;
                     inaccessible = 0;
                     cache_write_started = false;
+                    cache_active = false;
+                }
+                _ if view == AnalyzerView::TopFiles => {
+                    top_state.handle_key(&top_rows, key);
                 }
                 _ => match tree_state.handle_key(&rows, key) {
                     TreeOutcome::Toggle(id) | TreeOutcome::Activated(id) => {
@@ -534,9 +1201,15 @@ pub async fn run(root: PathBuf) -> anyhow::Result<()> {
         }
     }
 
-    handle.cancel.store(true, Ordering::Release);
+    if let Some(handle) = handle.as_ref() {
+        handle.cancel.store(true, Ordering::Release);
+    }
     drop(terminal);
     session.restore()?;
+    if let Some(task) = spotlight_task {
+        task.abort();
+        let _ = task.await;
+    }
     for writer in cache_writes {
         if writer.join().is_err() {
             eprintln!("holla: size cache writer panicked");
@@ -685,6 +1358,7 @@ fn drain_scan_events(
     result
 }
 
+#[cfg(test)]
 pub fn effective_selection(tree: &ScanTree, checked: &[NodeId]) -> (Vec<NodeId>, u64) {
     let checked_set: HashSet<_> = checked.iter().copied().collect();
     let effective: Vec<_> = checked
@@ -708,17 +1382,43 @@ pub fn effective_selection(tree: &ScanTree, checked: &[NodeId]) -> (Vec<NodeId>,
     (effective, bytes)
 }
 
-fn selected_items(handle: &ScanHandle, state: &TreeState<NodeId>, root: &Path) -> Vec<CleanupItem> {
-    let tree = handle.tree.read().expect("disk scan tree lock");
+fn top_file_rows(files: Option<&TopFiles>) -> Vec<ListRow<'static, usize>> {
+    let Some(TopFiles::Available(files)) = files else {
+        return Vec::new();
+    };
+    files
+        .iter()
+        .enumerate()
+        .map(|(id, file)| ListRow {
+            id,
+            label: Line::from(file.path.display().to_string()),
+            trailing: Some(Line::from(format_size(file.on_disk, DECIMAL))),
+            role: RowRole::Item,
+            enabled: true,
+        })
+        .collect()
+}
+
+fn selected_top_files(
+    files: Option<&TopFiles>,
+    state: &ListState<usize>,
+) -> (Vec<CleanupItem>, u64) {
+    let Some(TopFiles::Available(files)) = files else {
+        return (Vec::new(), 0);
+    };
     let checked = state
         .selection()
         .map(|selection| selection.checked())
         .unwrap_or_default();
-    effective_selection(&tree, checked)
-        .0
-        .into_iter()
-        .map(|id| CleanupItem::new(node_path(&tree, root, id), tree.node(id).on_disk))
-        .collect()
+    let items = checked
+        .iter()
+        .filter_map(|id| files.get(*id))
+        .map(|file| CleanupItem::new(file.path.clone(), file.on_disk))
+        .collect::<Vec<_>>();
+    let bytes = items
+        .iter()
+        .fold(0_u64, |total, item| total.saturating_add(item.size));
+    (items, bytes)
 }
 
 fn node_path(tree: &ScanTree, root: &Path, id: NodeId) -> PathBuf {
@@ -742,6 +1442,7 @@ fn node_path(tree: &ScanTree, root: &Path, id: NodeId) -> PathBuf {
     path
 }
 
+#[cfg(test)]
 fn project_tree(
     tree: &ScanTree,
     expanded: &HashSet<NodeId>,
@@ -805,7 +1506,7 @@ fn project_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::du::{NodeState, ScanTree};
+    use crate::du::{NodeState, ScanTree, spotlight::TopFile};
     use termrock::widgets::TreeNodeStatus;
 
     struct Fixture {
@@ -838,7 +1539,7 @@ mod tests {
             on_disk,
             apparent: on_disk,
             entry_count: 1,
-            scanned_at: 100,
+            scanned_at: 100_000,
             root_mtime: 1,
         }
     }
@@ -999,7 +1700,7 @@ mod tests {
             ],
         );
         let rows = cached.rows(
-            &HashSet::from([NodeId(0)]),
+            &HashSet::from([cached.root_id().unwrap()]),
             SortKey::OnDisk,
             UNIX_EPOCH + Duration::from_secs(200),
             &Theme::default(),
@@ -1017,7 +1718,7 @@ mod tests {
         let theme = Theme::tailrocks_phosphor();
         let cached = CachedProjection::new(&root, vec![(root.clone(), cached_size(30))]);
         let rows = cached.rows(
-            &HashSet::from([NodeId(0)]),
+            &HashSet::from([cached.root_id().unwrap()]),
             SortKey::OnDisk,
             UNIX_EPOCH + Duration::from_secs(200),
             &theme,
@@ -1032,5 +1733,217 @@ mod tests {
                 .contains("cached")
         );
         assert_eq!(rows[0].label.style, theme.style(Role::TextMuted));
+        assert_eq!(
+            rows[0].trailing.as_ref().unwrap().style,
+            theme.style(Role::TextMuted)
+        );
+    }
+
+    #[test]
+    fn tree_state_drops_focus_and_checks_for_rows_that_disappear() {
+        let root = PathBuf::from("/tmp/root");
+        let hidden = root.join("hidden");
+        let cached = CachedProjection::new(
+            &root,
+            vec![
+                (root.clone(), cached_size(30)),
+                (hidden.clone(), cached_size(20)),
+            ],
+        );
+        let projection = merged_projection(
+            &root,
+            None,
+            &cached,
+            &HashSet::from([root.clone()]),
+            ProjectionOptions {
+                cache_active: true,
+                folding: false,
+                sort: SortKey::OnDisk,
+                now: UNIX_EPOCH + Duration::from_secs(200),
+            },
+            &Theme::default(),
+        );
+        let mut state = TreeState::new(Some(hidden.clone()));
+        state.enable_multi_select();
+        state.selection_mut().unwrap().toggle(&hidden);
+
+        reconcile_tree_state(&mut state, &projection.rows[..1], &projection.sizes);
+
+        assert_eq!(state.selected(), Some(&root));
+        assert_eq!(
+            state.selection().unwrap().checked(),
+            std::slice::from_ref(&hidden)
+        );
+
+        let only_root = HashMap::from([(root.clone(), 30)]);
+        reconcile_tree_state(&mut state, &projection.rows[..1], &only_root);
+        assert!(state.selection().unwrap().checked().is_empty());
+    }
+
+    #[test]
+    fn cached_paths_remain_until_the_matching_live_node_has_size() {
+        let root = PathBuf::from("/tmp/root");
+        let cached = CachedProjection::new(
+            &root,
+            vec![
+                (root.clone(), cached_size(30)),
+                (root.join("large"), cached_size(20)),
+                (root.join("large/nested"), cached_size(10)),
+            ],
+        );
+        let mut tree = ScanTree::new("root".into(), true);
+        let large = tree.add_dir(tree.root(), "large".into());
+        let expanded = HashSet::from([root.clone(), root.join("large")]);
+        let theme = Theme::default();
+        let projection = merged_projection(
+            &root,
+            Some(&tree),
+            &cached,
+            &expanded,
+            ProjectionOptions {
+                cache_active: true,
+                folding: false,
+                sort: SortKey::OnDisk,
+                now: SystemTime::now(),
+            },
+            &theme,
+        );
+        assert!(
+            projection
+                .rows
+                .iter()
+                .find(|row| row.label.to_string() == "large")
+                .unwrap()
+                .trailing
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("cached")
+        );
+        assert_eq!(projection.rows[0].id, root);
+        assert_eq!(projection.rows[1].id, root.join("large"));
+        assert_eq!(projection.rows[2].id, root.join("large/nested"));
+        let checked = vec![root.join("large")];
+        assert_eq!(
+            selected_projection_items(&projection, &checked)[0].path,
+            root.join("large")
+        );
+
+        tree.add_sizes(large, 25, 25, 1);
+        let projection = merged_projection(
+            &root,
+            Some(&tree),
+            &cached,
+            &expanded,
+            ProjectionOptions {
+                cache_active: true,
+                folding: false,
+                sort: SortKey::OnDisk,
+                now: SystemTime::now(),
+            },
+            &theme,
+        );
+        assert!(
+            !projection
+                .rows
+                .iter()
+                .find(|row| row.label.to_string() == "large")
+                .unwrap()
+                .trailing
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("cached")
+        );
+        assert_eq!(projection.rows[1].id, root.join("large"));
+        assert_eq!(
+            selected_projection_items(&projection, &checked)[0].path,
+            root.join("large")
+        );
+    }
+
+    #[test]
+    fn top_file_rows_keep_full_paths_and_exact_sizes() {
+        let files = TopFiles::Available(vec![TopFile {
+            path: PathBuf::from("/tmp/large image.dmg"),
+            on_disk: 250_000_000,
+        }]);
+        let rows = top_file_rows(Some(&files));
+
+        assert_eq!(rows[0].label.to_string(), "/tmp/large image.dmg");
+        assert_eq!(rows[0].trailing.as_ref().unwrap().to_string(), "250 MB");
+    }
+
+    #[test]
+    fn top_file_selection_builds_shared_cleanup_items() {
+        let files = TopFiles::Available(vec![
+            TopFile {
+                path: PathBuf::from("/tmp/one"),
+                on_disk: 100,
+            },
+            TopFile {
+                path: PathBuf::from("/tmp/two"),
+                on_disk: 200,
+            },
+        ]);
+        let mut state = ListState::new(Some(1));
+        state.enable_multi_select();
+        state.selection_mut().unwrap().toggle(&1);
+
+        let (items, bytes) = selected_top_files(Some(&files), &state);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].path, PathBuf::from("/tmp/two"));
+        assert_eq!(bytes, 200);
+    }
+
+    #[test]
+    fn overview_projection_labels_cache_hits_and_misses() {
+        let items = vec![
+            OverviewItem {
+                path: PathBuf::from("/tmp/cached"),
+                label: "cached".into(),
+                cached: Some(cached_size(42_000_000)),
+                insight: false,
+            },
+            OverviewItem {
+                path: PathBuf::from("/tmp/new"),
+                label: "new".into(),
+                cached: None,
+                insight: false,
+            },
+        ];
+        let rows = overview_rows(
+            &items,
+            UNIX_EPOCH + Duration::from_secs(200),
+            &Theme::default(),
+        );
+
+        assert!(
+            rows[0]
+                .trailing
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("cached")
+        );
+        assert_eq!(
+            rows[1].trailing.as_ref().unwrap().to_string(),
+            "not scanned yet"
+        );
+    }
+
+    #[test]
+    fn overview_projection_distinguishes_detected_insights() {
+        let theme = Theme::tailrocks_phosphor();
+        let items = vec![OverviewItem {
+            path: PathBuf::from("/tmp/cache"),
+            label: "Package cache · /tmp/cache".into(),
+            cached: None,
+            insight: true,
+        }];
+        let rows = overview_rows(&items, SystemTime::now(), &theme);
+
+        assert_eq!(rows[0].label.style, theme.style(Role::Accent));
+        assert!(rows[0].label.to_string().contains("Package cache"));
     }
 }

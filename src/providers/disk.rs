@@ -22,19 +22,13 @@ pub(super) fn group() -> GroupSpec {
         title: "Disk usage".into(),
         actions: vec![
             ActionSpec::new(
-                "disk.scan-home",
-                "Analyze home folder",
-                "Find what uses space in your home folder",
-                "$ holla disk analyze ~",
-                &["disk", "space", "storage", "home"],
+                "disk.overview",
+                "Disk overview",
+                "Inspect cached home locations, cleanup insights, or Spotlight top files",
+                "$ holla disk overview",
+                &["disk", "space", "storage", "home", "spotlight"],
                 Danger::Safe,
-                || {
-                    Box::pin(async {
-                        let root = dirs::home_dir()
-                            .ok_or_else(|| anyhow::anyhow!("home directory is unavailable"))?;
-                        analyzer::run(root).await
-                    })
-                },
+                || Box::pin(analyzer::overview()),
             ),
             ActionSpec::new(
                 "disk.scan-here",
@@ -80,7 +74,7 @@ mod tests {
                 .iter()
                 .map(|action| action.id.as_str())
                 .collect::<Vec<_>>(),
-            ["disk.scan-home", "disk.scan-here", "disk.scan-custom"]
+            ["disk.overview", "disk.scan-here", "disk.scan-custom"]
         );
         assert!(
             group

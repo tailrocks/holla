@@ -5,12 +5,13 @@ use std::{
     io,
     os::fd::AsRawFd,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use super::{NodeId, ScanTree};
 
-const SCHEMA_VERSION: u8 = 1;
+const SCHEMA_VERSION: u8 = 3;
 const TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -24,8 +25,50 @@ pub struct CachedSize {
 
 #[derive(Clone, Debug)]
 pub struct SizeSnapshot {
-    scanned_at: u64,
-    entries: Vec<(PathBuf, u64, u64, u64)>,
+    entries: Vec<(PathBuf, CachedSize)>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SizeBaseline {
+    mtimes: HashMap<PathBuf, u64>,
+}
+
+impl SizeBaseline {
+    pub fn capture(root: &Path) -> Self {
+        Self::capture_cancellable(root, &AtomicBool::new(false))
+    }
+
+    pub fn capture_cancellable(root: &Path, cancel: &AtomicBool) -> Self {
+        let mut baseline = Self::default();
+        baseline.capture_path(root, 0, cancel);
+        baseline
+    }
+
+    fn capture_path(&mut self, path: &Path, depth: usize, cancel: &AtomicBool) {
+        if cancel.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(mtime) = modified_nanos(path) {
+            self.mtimes.insert(path.to_path_buf(), mtime);
+        }
+        if depth >= 2 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if cancel.load(Ordering::Acquire) {
+                break;
+            }
+            self.capture_path(&entry.path(), depth + 1, cancel);
+        }
+    }
+
+    fn unchanged_mtime(&self, path: &Path) -> Option<u64> {
+        let before = self.mtimes.get(path).copied()?;
+        (modified_nanos(path)? == before).then_some(before)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -68,10 +111,7 @@ impl SizeCache {
 
     pub fn valid(&self, path: &Path, now: SystemTime) -> Option<&CachedSize> {
         let entry = self.entries.get(path)?;
-        let age = now
-            .duration_since(UNIX_EPOCH + Duration::from_secs(entry.scanned_at))
-            .unwrap_or_default();
-        if age > TTL || modified_nanos(path)? != entry.root_mtime {
+        if !entry_is_valid(path, entry, now) {
             return None;
         }
         Some(entry)
@@ -96,25 +136,17 @@ impl SizeCache {
     }
 
     pub fn capture(&mut self, root: &Path, tree: &ScanTree, scanned_at: SystemTime) {
-        self.capture_snapshot(snapshot(root, tree, scanned_at));
+        self.capture_snapshot(snapshot(
+            root,
+            tree,
+            scanned_at,
+            &SizeBaseline::capture(root),
+        ));
     }
 
     pub fn capture_snapshot(&mut self, snapshot: SizeSnapshot) {
-        let scanned_at = snapshot.scanned_at;
-        for (path, on_disk, apparent, entry_count) in snapshot.entries {
-            let Some(root_mtime) = modified_nanos(&path) else {
-                continue;
-            };
-            self.entries.insert(
-                path,
-                CachedSize {
-                    on_disk,
-                    apparent,
-                    entry_count,
-                    scanned_at,
-                    root_mtime,
-                },
-            );
+        for (path, entry) in snapshot.entries {
+            self.entries.insert(path, entry);
         }
     }
 
@@ -141,7 +173,23 @@ impl SizeCache {
         }
 
         let mut merged = Self::load_from(path);
-        merged.entries.extend(self.entries.clone());
+        let now = SystemTime::now();
+        merged
+            .entries
+            .retain(|entry_path, entry| entry_is_valid(entry_path, entry, now));
+        for (path, entry) in self
+            .entries
+            .iter()
+            .filter(|(entry_path, entry)| entry_is_valid(entry_path, entry, now))
+        {
+            let replace = merged
+                .entries
+                .get(path)
+                .is_none_or(|current| entry.scanned_at > current.scanned_at);
+            if replace {
+                merged.entries.insert(path.clone(), entry.clone());
+            }
+        }
         let bytes = serde_json::to_vec_pretty(&merged).map_err(io::Error::other)?;
         let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
         fs::write(&temporary, bytes)?;
@@ -149,21 +197,35 @@ impl SizeCache {
     }
 }
 
-pub fn snapshot(root: &Path, tree: &ScanTree, scanned_at: SystemTime) -> SizeSnapshot {
+pub fn snapshot(
+    root: &Path,
+    tree: &ScanTree,
+    scanned_at: SystemTime,
+    baseline: &SizeBaseline,
+) -> SizeSnapshot {
     let mut entries = Vec::new();
-    let scanned_at = epoch_secs(scanned_at);
+    let scanned_at = epoch_nanos(scanned_at);
     for (index, node) in tree.nodes().iter().enumerate() {
         let id = NodeId(u32::try_from(index).expect("scan tree exceeded u32 nodes"));
         if node_depth(tree, id) > 2 {
             continue;
         }
         let path = node_path(tree, root, id);
-        entries.push((path, node.on_disk, node.apparent, node.entry_count));
+        let Some(root_mtime) = baseline.unchanged_mtime(&path) else {
+            continue;
+        };
+        entries.push((
+            path,
+            CachedSize {
+                on_disk: node.on_disk,
+                apparent: node.apparent,
+                entry_count: node.entry_count,
+                scanned_at,
+                root_mtime,
+            },
+        ));
     }
-    SizeSnapshot {
-        scanned_at,
-        entries,
-    }
+    SizeSnapshot { entries }
 }
 
 fn cache_path() -> Option<PathBuf> {
@@ -173,10 +235,19 @@ fn cache_path() -> Option<PathBuf> {
         .map(|cache| cache.join("holla/sizes.json"))
 }
 
-fn epoch_secs(time: SystemTime) -> u64 {
+fn epoch_nanos(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs()
+        .as_nanos()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn entry_is_valid(path: &Path, entry: &CachedSize, now: SystemTime) -> bool {
+    let age = now
+        .duration_since(UNIX_EPOCH + Duration::from_nanos(entry.scanned_at))
+        .unwrap_or_default();
+    age <= TTL && modified_nanos(path) == Some(entry.root_mtime)
 }
 
 fn modified_nanos(path: &Path) -> Option<u64> {
@@ -254,14 +325,10 @@ mod tests {
         let fixture = tempdir().unwrap();
         let root = fixture.path().join("root");
         let tree = fixture_tree(&root);
-        let scanned = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let scanned = SystemTime::now() - TTL - Duration::from_secs(1);
         let mut cache = SizeCache::default();
         cache.capture(&root, &tree, scanned);
-        assert!(
-            cache
-                .valid(&root, scanned + TTL + Duration::from_secs(1))
-                .is_none()
-        );
+        assert!(cache.valid(&root, SystemTime::now()).is_none());
     }
 
     #[test]
@@ -301,6 +368,16 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_baseline_does_no_filesystem_work() {
+        let fixture = tempdir().unwrap();
+        let cancel = AtomicBool::new(true);
+
+        let baseline = SizeBaseline::capture_cancellable(fixture.path(), &cancel);
+
+        assert!(baseline.mtimes.is_empty());
+    }
+
+    #[test]
     fn save_merges_entries_from_independent_scans() {
         let fixture = tempdir().unwrap();
         let path = fixture.path().join("sizes.json");
@@ -316,5 +393,62 @@ mod tests {
         let merged = SizeCache::load_from(&path);
         assert!(merged.entries.contains_key(&first_root));
         assert!(merged.entries.contains_key(&second_root));
+    }
+
+    #[test]
+    fn delayed_older_writer_cannot_replace_newer_entry() {
+        let fixture = tempdir().unwrap();
+        let path = fixture.path().join("sizes.json");
+        let root = fixture.path().join("root");
+        let tree = fixture_tree(&root);
+        let mut newer = SizeCache::default();
+        let now = SystemTime::now();
+        newer.capture(&root, &tree, now);
+        newer.save_to(&path).unwrap();
+        let mut older = SizeCache::default();
+        older.capture(&root, &tree, now - Duration::from_secs(1));
+        older.save_to(&path).unwrap();
+
+        assert_eq!(
+            SizeCache::load_from(&path)
+                .entries
+                .get(&root)
+                .unwrap()
+                .scanned_at,
+            epoch_nanos(now)
+        );
+    }
+
+    #[test]
+    fn save_prunes_expired_and_missing_entries() {
+        let fixture = tempdir().unwrap();
+        let path = fixture.path().join("sizes.json");
+        let root = fixture.path().join("root");
+        let tree = fixture_tree(&root);
+        let mut stale = SizeCache::default();
+        stale.capture(
+            &root,
+            &tree,
+            SystemTime::now() - TTL - Duration::from_secs(1),
+        );
+        let bytes = serde_json::to_vec(&stale).unwrap();
+        fs::write(&path, bytes).unwrap();
+
+        SizeCache::default().save_to(&path).unwrap();
+
+        assert!(SizeCache::load_from(&path).entries.is_empty());
+    }
+
+    #[test]
+    fn snapshot_omits_paths_changed_during_scan() {
+        let fixture = tempdir().unwrap();
+        let root = fixture.path().join("root");
+        let tree = fixture_tree(&root);
+        let baseline = SizeBaseline::capture(&root);
+        std::thread::sleep(Duration::from_millis(2));
+        fs::write(root.join("changed-after-scan"), b"changed").unwrap();
+        let snapshot = snapshot(&root, &tree, SystemTime::now(), &baseline);
+
+        assert!(!snapshot.entries.iter().any(|(path, _)| path == &root));
     }
 }

@@ -513,6 +513,11 @@ pub async fn run() -> anyhow::Result<()> {
             frame.render_stateful_widget(
                 &Viewport::new(&preview, &theme)
                     .title("Preview")
+                    .emphasis(if preview_focused {
+                        PanelEmphasis::Focused
+                    } else {
+                        PanelEmphasis::Normal
+                    })
                     .content_style(theme.style(Role::Text)),
                 preview_area,
                 &mut preview_scroll,

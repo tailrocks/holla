@@ -1,6 +1,7 @@
 pub mod cache;
 mod hardlinks;
 mod platform;
+pub mod spotlight;
 mod tree;
 mod walker;
 
