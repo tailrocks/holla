@@ -1,3 +1,4 @@
+pub mod cleanup;
 mod commands;
 pub mod du;
 mod model;
