@@ -58,8 +58,11 @@ pub fn validate(path: &Path) -> Result<(), Rejection> {
         || is_within(path, "/bin")
         || is_within(path, "/sbin")
         || is_within(path, "/etc")
+        || is_within(path, "/private/etc")
         || is_within(path, "/System")
         || is_within(path, "/var/db")
+        || is_within(path, "/private/var/db")
+        || path == Path::new("/usr/local")
         || matches!(path.to_str(), Some("/Library" | "/Applications" | "/Users"))
     {
         return Err(Rejection("path is protected".into()));
@@ -119,7 +122,21 @@ fn execute_with_log_path(plan: &DeletePlan, log_path: Option<&Path>) -> DeleteRe
             continue;
         }
 
-        let size = match apparent_size(path) {
+        if let Err(rejection) = validate_execution_path(path) {
+            record(
+                &mut report,
+                log_path,
+                plan,
+                path,
+                0,
+                "skipped",
+                Some(&rejection.0),
+            );
+            report.skipped.push((path.clone(), rejection.0));
+            continue;
+        }
+
+        let size = match on_disk_size(path) {
             Ok(size) => size,
             Err(error) => {
                 let message = error.to_string();
@@ -136,6 +153,26 @@ fn execute_with_log_path(plan: &DeletePlan, log_path: Option<&Path>) -> DeleteRe
                 continue;
             }
         };
+
+        // Size traversal can be slow. Recheck the parent chain immediately
+        // before mutation so a replaced ancestor cannot retain an earlier
+        // safety decision. The final component is intentionally not resolved:
+        // a selected symlink must remove only that link.
+        if !plan.dry_run
+            && let Err(rejection) = validate_execution_path(path)
+        {
+            record(
+                &mut report,
+                log_path,
+                plan,
+                path,
+                size,
+                "skipped",
+                Some(&rejection.0),
+            );
+            report.skipped.push((path.clone(), rejection.0));
+            continue;
+        }
 
         let result = if plan.dry_run {
             Ok(())
@@ -181,16 +218,76 @@ fn permanently_remove(path: &Path) -> std::io::Result<()> {
     }
 }
 
-fn apparent_size(path: &Path) -> std::io::Result<u64> {
+fn validate_execution_path(path: &Path) -> Result<(), Rejection> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Rejection("path has no parent".into()))?;
+    reject_symlink_ancestors(parent)?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| Rejection("path has no final component".into()))?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|error| Rejection(format!("path parent cannot be resolved: {error}")))?;
+    validate(&canonical_parent.join(name))
+}
+
+fn reject_symlink_ancestors(parent: &Path) -> Result<(), Rejection> {
+    let mut current = PathBuf::new();
+    for component in parent.components() {
+        current.push(component.as_os_str());
+        let Ok(metadata) = fs::symlink_metadata(&current) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() && !is_allowed_system_alias(&current) {
+            return Err(Rejection(format!(
+                "path traverses symlink ancestor {}",
+                current.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_allowed_system_alias(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let expected = match path.to_str() {
+            Some("/tmp") => Some(Path::new("/private/tmp")),
+            Some("/var") => Some(Path::new("/private/var")),
+            _ => None,
+        };
+        expected.is_some_and(|expected| path.canonicalize().ok().as_deref() == Some(expected))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+fn on_disk_size(path: &Path) -> std::io::Result<u64> {
     let metadata = fs::symlink_metadata(path)?;
+    let own_size = allocated_size(&metadata);
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Ok(metadata.len());
+        return Ok(own_size);
     }
 
-    fs::read_dir(path)?.try_fold(0_u64, |total, entry| {
+    fs::read_dir(path)?.try_fold(own_size, |total, entry| {
         let entry = entry?;
-        apparent_size(&entry.path()).map(|size| total.saturating_add(size))
+        on_disk_size(&entry.path()).map(|size| total.saturating_add(size))
     })
+}
+
+#[cfg(unix)]
+fn allocated_size(metadata: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.blocks().saturating_mul(512)
+}
+
+#[cfg(not(unix))]
+fn allocated_size(metadata: &fs::Metadata) -> u64 {
+    metadata.len()
 }
 
 #[derive(Serialize)]
@@ -301,6 +398,7 @@ mod tests {
     rejected!(rejects_usr_lib, "/usr/lib/x");
     rejected!(rejects_etc, "/etc");
     rejected!(rejects_etc_child, "/etc/hosts");
+    rejected!(rejects_private_etc_child, "/private/etc/hosts");
     rejected!(rejects_system, "/System");
     rejected!(rejects_system_child, "/System/Library/x");
     rejected!(rejects_library_root, "/Library");
@@ -308,6 +406,8 @@ mod tests {
     rejected!(rejects_users_root, "/Users");
     rejected!(rejects_var_db, "/var/db");
     rejected!(rejects_var_db_child, "/var/db/x");
+    rejected!(rejects_private_var_db_child, "/private/var/db/x");
+    rejected!(rejects_usr_local_root, "/usr/local");
 
     #[test]
     fn rejects_home() {
@@ -362,12 +462,13 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let file = temp.path().join("file");
         fs::write(&file, b"12345").unwrap();
+        let expected_size = on_disk_size(&file).unwrap();
         let report = execute(&DeletePlan {
             items: vec![file.clone()],
             mode: DeleteMode::Permanent,
             dry_run: false,
         });
-        assert_eq!(report.removed, vec![(file.clone(), 5)]);
+        assert_eq!(report.removed, vec![(file.clone(), expected_size)]);
         assert!(!file.exists());
         assert!(report.failed.is_empty());
         assert!(report.skipped.is_empty());
@@ -398,7 +499,10 @@ mod tests {
             mode: DeleteMode::Permanent,
             dry_run: true,
         });
-        assert_eq!(report.removed, vec![(file.clone(), 3)]);
+        assert_eq!(
+            report.removed,
+            vec![(file.clone(), on_disk_size(&file).unwrap())]
+        );
         assert!(file.exists());
     }
 
@@ -442,6 +546,45 @@ mod tests {
         assert_eq!(report.removed.len(), 1);
         assert!(!link.exists());
         assert!(target.exists());
+    }
+
+    #[test]
+    fn symlinked_parent_cannot_bypass_protected_roots() {
+        let temp = TempDir::new().unwrap();
+        let link = temp.path().join("system-bin");
+        symlink("/usr/bin", &link).unwrap();
+        let path = link.join("holla-imaginary-tool");
+        assert_eq!(validate(&path), Ok(()));
+
+        let report = execute(&DeletePlan {
+            items: vec![path.clone()],
+            mode: DeleteMode::Permanent,
+            dry_run: false,
+        });
+
+        assert!(report.failed.is_empty());
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].0, path);
+    }
+
+    #[test]
+    fn symlinked_parent_is_rejected_even_when_target_is_unprotected() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        let link = temp.path().join("link");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("child"), b"keep").unwrap();
+        symlink(&target, &link).unwrap();
+        let through_link = link.join("child");
+
+        let report = execute(&DeletePlan {
+            items: vec![through_link],
+            mode: DeleteMode::Permanent,
+            dry_run: false,
+        });
+
+        assert_eq!(report.skipped.len(), 1);
+        assert!(target.join("child").exists());
     }
 
     #[test]
@@ -492,7 +635,7 @@ mod tests {
         assert_eq!(value["v"], 1);
         assert_eq!(value["mode"], "permanent");
         assert_eq!(value["path"], file.to_string_lossy().as_ref());
-        assert_eq!(value["size"], 3);
+        assert_eq!(value["size"], on_disk_size(&file).unwrap());
         assert_eq!(value["outcome"], "dry_run");
         assert!(value["timestamp_ms"].as_u64().is_some());
     }
