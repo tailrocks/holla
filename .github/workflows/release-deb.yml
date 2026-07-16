@@ -11,8 +11,7 @@
 # - Staging + artifact per target, then attach + optional cross to *-apt
 #
 # We only target the latest and greatest Debian (recent glibc via zigbuild,
-# no old-glibc .2.17 compatibility shims — those are only for the portable
-# tarball builds in the main release.yml for Homebrew). $auto depends in
+# no old-glibc compatibility shims). $auto depends in
 # cargo-deb + modern target produce a .deb suitable for current Debian/Ubuntu.
 #
 # Separate from main release.yml (which does multi-platform tarballs +
@@ -49,13 +48,13 @@ jobs:
             zigbuild: true
           - target: aarch64-unknown-linux-gnu
             zigbuild: true
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       VERSION: ${{ github.event.inputs.tag && github.event.inputs.tag || github.ref_name }}
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
@@ -71,7 +70,7 @@ jobs:
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
 
-      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+      - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
           install_args: "rust zig cargo:cargo-zigbuild"
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -80,7 +79,7 @@ jobs:
 
 
       - name: Cache Cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/cache
@@ -95,7 +94,10 @@ jobs:
         uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
 
       - name: Build
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
+          export HOLLA_VERSION_OVERRIDE="${TAG#v}"
           if [ "${{ matrix.zigbuild }}" = "true" ]; then
             # Use modern glibc target (no .2.17) because we only target latest Debian
             # for the .deb packages (see previous "latest and greatest Debian only" requirement).
@@ -129,7 +131,7 @@ jobs:
           sha256sum "$DEB_DST" | awk '{print $1}' > "$DEB_DST.sha256"
           ls -l "$DEB_DST"*
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: holla-deb-${{ matrix.target }}
           path: |
@@ -138,15 +140,15 @@ jobs:
 
   attach-and-deliver:
     needs: build-deb
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
           merge-multiple: true

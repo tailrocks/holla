@@ -8,6 +8,11 @@ No config. No setup. It just looks at what you have and shows you what's possibl
 
 Holla is Rust-first. Prefer Rust for new project-owned commands, probes, release tooling, parsers, and long-lived automation; use another language only when an external ecosystem makes it the natural fit, and keep that exception local.
 
+Product brief, mission, and roadmap: see [PRODUCT.md](PRODUCT.md).
+
+Completed implementation-plan evidence: see
+[docs/plan-completion-audit.md](docs/plan-completion-audit.md).
+
 ## How it works
 
 When you run `holla`, it probes your system for installed tools (git, docker, brew, gradle, etc.) and builds a menu on the fly. Only the tools you actually have show up.
@@ -35,6 +40,10 @@ Select an action and watch it run with live output per task, side by side.
 |---|---|
 | **macOS** | Upgrade brew, brew casks, mise, amp — all in parallel |
 | **Git** | Pull / push / status across all repos in the current directory |
+| **Project tasks** | Run package.json, Just, Make, Taskfile, and mise tasks |
+| **Cargo** | Build, test, clippy, and confirmed clean |
+| **Git hygiene** | Fetch/prune, garbage collect, and confirmed merged-branch deletion |
+| **Brew services** | Start, stop, and restart detected services |
 | **Docker** | Stop all containers, full clean (containers + images + volumes) |
 | **Gradle** | Stop daemon, clean build directories |
 | **IntelliJ IDEA** | Remove `.idea` dirs and `.iml` files |
@@ -58,6 +67,11 @@ See the full design and install instructions in [docs/debian-apt-repo.md](docs/d
 
 Debian packages (`.deb`) for `amd64` and `arm64` are also attached to every GitHub Release and can be installed directly with `dpkg -i` as a fallback.
 
+The Linux launcher, Git/Cargo/project providers, task runner, disk scanner, and
+FreeDesktop Trash path are verified on Debian. macOS-only actions and cleanup
+insights are hidden. Native apt/dnf, systemd-user, and broader XDG insights are
+sequenced in the [Linux port design](docs/linux-port.md).
+
 ### From source
 
 ```bash
@@ -72,7 +86,36 @@ Debian packages (`.deb`) for `amd64` and `arm64` are also attached to every GitH
 holla
 ```
 
-That's it.
+Zero config remains the default. For scripts and tooling:
+
+```bash
+holla list --json
+holla run git.status
+holla doctor
+```
+
+`list --json` emits a versioned `{"v":1,"actions":[...]}` envelope. Headless
+destructive or explicitly confirmed actions require `--yes`.
+
+### Custom actions
+
+Put global actions in `~/.config/holla/actions.toml`, or project actions in
+`.holla.toml`:
+
+```toml
+[[action]]
+id = "team.deploy-staging"
+label = "deploy: staging"
+description = "Deploy current branch to staging"
+command = ["./scripts/deploy.sh", "staging"]
+danger = "mutating"
+keywords = ["deploy", "staging"]
+confirm = true
+```
+
+Commands are argv arrays only; shell strings are rejected. Project actions are
+marked unreviewed until their exact file hash is trusted. Editing the file
+requires review again.
 
 ## License
 

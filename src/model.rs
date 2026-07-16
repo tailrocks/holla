@@ -1,0 +1,73 @@
+use std::{future::Future, pin::Pin};
+
+pub type ActionFuture = Pin<Box<dyn Future<Output = anyhow::Result<()>>>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Danger {
+    Safe,
+    Mutating,
+    Destructive,
+}
+
+pub struct ActionSpec {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub preview: String,
+    pub keywords: Vec<String>,
+    pub danger: Danger,
+    pub confirm: bool,
+    pub trust_required: bool,
+    pub run: Box<dyn Fn() -> ActionFuture + Send>,
+}
+
+pub struct GroupSpec {
+    pub id: String,
+    pub title: String,
+    pub actions: Vec<ActionSpec>,
+}
+
+impl ActionSpec {
+    pub fn new(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        description: impl Into<String>,
+        preview: impl Into<String>,
+        keywords: &'static [&'static str],
+        danger: Danger,
+        run: impl Fn() -> ActionFuture + Send + 'static,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            description: description.into(),
+            preview: preview.into(),
+            keywords: keywords
+                .iter()
+                .map(|keyword| (*keyword).to_owned())
+                .collect(),
+            danger,
+            confirm: false,
+            trust_required: false,
+            run: Box::new(run),
+        }
+    }
+
+    #[must_use]
+    pub fn with_confirmation(mut self, confirm: bool) -> Self {
+        self.confirm = confirm;
+        self
+    }
+
+    #[must_use]
+    pub fn with_keywords(mut self, keywords: Vec<String>) -> Self {
+        self.keywords = keywords;
+        self
+    }
+
+    #[must_use]
+    pub fn with_trust_required(mut self, trust_required: bool) -> Self {
+        self.trust_required = trust_required;
+        self
+    }
+}

@@ -16,11 +16,13 @@ pub async fn stop_all() -> anyhow::Result<()> {
             label: "Stopping containers".into(),
             program: "sh".into(),
             args: stop_args,
+            working_directory: None,
         },
         TaskDef {
             label: "Removing containers".into(),
             program: "sh".into(),
             args: rm_args,
+            working_directory: None,
         },
     ])
     .await
@@ -40,6 +42,7 @@ pub async fn clean() -> anyhow::Result<()> {
                 "-c".into(),
                 "docker rmi --force $(docker images -qa) 2>/dev/null || true".into(),
             ],
+            working_directory: None,
         },
         TaskDef::new(
             "Pruning networks",
@@ -49,6 +52,15 @@ pub async fn clean() -> anyhow::Result<()> {
         TaskDef::new("Pruning system", "docker", &["system", "prune", "--force"]),
         TaskDef::new("Pruning volumes", "docker", &["volume", "prune", "--force"]),
     ])
+    .await
+}
+
+pub async fn builder_prune() -> anyhow::Result<()> {
+    run_tasks(vec![TaskDef::new(
+        "Pruning Docker builder cache",
+        "docker",
+        &["builder", "prune", "-f"],
+    )])
     .await
 }
 

@@ -1,432 +1,697 @@
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
+use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{
-    Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    layout::{Constraint, Layout},
+    text::{Line, Span, Text},
 };
-use std::{io, time::Duration};
+use std::{collections::HashSet, sync::mpsc, time::Duration};
+use termrock::{
+    input::KeyCode,
+    interaction::Outcome,
+    keymap::{KeyBinding, KeyChord, Keymap, Visibility},
+    layout::centered_rect,
+    scroll::{DialogScroll, max_line_width},
+    style::{Role, Theme},
+    widgets::{
+        Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, List, ListRow,
+        ListState, Panel, PanelEmphasis, RowRole, Severity, StatusBar, StatusBarState, StatusSlot,
+        TextInput, TextInputOutcome, TextInputState, Toast, Validation, Viewport, render_hint_bar,
+    },
+};
+use unicode_segmentation::UnicodeSegmentation;
 
-use crate::probe::Probe;
+use crate::{
+    frecency::{FrecencyStore, now_epoch_secs},
+    model::{ActionSpec, Danger, GroupSpec},
+    providers::{self, ScanEvent},
+    search::{SearchHit, search_with_history},
+};
 
-/// Boxed future returned by an [`Action`] handler.
-pub type ActionFuture = std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>>>>;
-
-pub struct Action {
-    pub label: String,
-    pub description: String,
-    pub preview: String,
-    pub handler: Box<dyn Fn() -> ActionFuture>,
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ActionId {
+    Separator(String),
+    Action { id: String, recent: bool },
 }
 
-pub struct Group {
-    pub title: String,
-    pub icon: &'static str,
-    pub actions: Vec<Action>,
-}
-
+#[derive(Default)]
 pub struct Menu {
-    pub groups: Vec<Group>,
+    pub groups: Vec<GroupSpec>,
+    provider_orders: Vec<usize>,
+    provider_ids: Vec<&'static str>,
+    warnings: Vec<String>,
 }
 
 impl Menu {
-    pub fn build(probe: &Probe) -> Self {
-        let mut groups: Vec<Group> = Vec::new();
+    #[cfg(test)]
+    fn from_groups(groups: Vec<GroupSpec>) -> Self {
+        let provider_orders = (0..groups.len()).collect();
+        Self {
+            groups,
+            provider_orders,
+            provider_ids: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
 
-        // ── Current folder ──────────────────────────────────────────────
-        let mut current_actions: Vec<Action> = Vec::new();
+    fn insert_scanned_group(
+        &mut self,
+        provider_index: usize,
+        provider_id: &'static str,
+        group: GroupSpec,
+    ) {
+        let position = self
+            .provider_orders
+            .partition_point(|index| *index < provider_index);
+        self.provider_orders.insert(position, provider_index);
+        self.provider_ids.insert(position, provider_id);
+        self.groups.insert(position, group);
+        self.deduplicate_actions();
+    }
 
-        if !probe.mise_tasks.is_empty() {
-            for task in &probe.mise_tasks {
-                let name = task.name.clone();
-                let desc = if task.description.is_empty() {
-                    format!("Run mise task `{name}`")
+    fn deduplicate_actions(&mut self) {
+        let mut seen = HashSet::new();
+        for group in &mut self.groups {
+            group.actions.retain(|action| {
+                if seen.insert(action.id.clone()) {
+                    true
                 } else {
-                    task.description.clone()
-                };
-                let preview = format!("$ mise run {name}");
-                let name_clone = name.clone();
-                current_actions.push(Action {
-                    label: format!("mise: {name}"),
-                    description: desc,
-                    preview,
-                    handler: Box::new(move || {
-                        let n = name_clone.clone();
-                        Box::pin(async move { crate::commands::mise::run(&n).await })
-                    }),
+                    self.warnings.push(format!(
+                        "action id `{}` collides with an earlier provider; earlier action wins",
+                        action.id
+                    ));
+                    false
+                }
+            });
+        }
+    }
+
+    fn action(&self, id: &str) -> Option<&ActionSpec> {
+        self.groups
+            .iter()
+            .flat_map(|group| &group.actions)
+            .find(|action| action.id == id)
+    }
+
+    fn row_action(&self, row: &ActionId) -> Option<&ActionSpec> {
+        match row {
+            ActionId::Action { id, .. } => self.action(id),
+            ActionId::Separator(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum MenuKey {
+    Navigate,
+    Run,
+    Preview,
+    Quit,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum HeaderSlot {
+    Product,
+    Context,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ConfirmChoice {
+    Cancel,
+    Run,
+}
+
+struct PendingConfirm {
+    action_id: String,
+    state: ChoiceDialogState<ConfirmChoice>,
+}
+
+static MENU_BINDINGS: &[KeyBinding<MenuKey>] = &[
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::Up), KeyChord::plain(KeyCode::Down)],
+        MenuKey::Navigate,
+        Some("navigate"),
+        Visibility::Shown,
+        Some("↑↓"),
+    ),
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::Enter)],
+        MenuKey::Run,
+        Some("run"),
+        Visibility::Shown,
+        Some("⏎"),
+    ),
+    KeyBinding::borrowed(
+        &[
+            KeyChord::plain(KeyCode::Tab),
+            KeyChord::plain(KeyCode::Right),
+        ],
+        MenuKey::Preview,
+        Some("preview"),
+        Visibility::Shown,
+        Some("tab"),
+    ),
+    KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::Esc)],
+        MenuKey::Quit,
+        Some("clear/quit"),
+        Visibility::Shown,
+        Some("esc"),
+    ),
+];
+static MENU_KEYMAP: Keymap<MenuKey> = Keymap::from_static(MENU_BINDINGS);
+
+#[cfg(test)]
+fn menu_rows(menu: &Menu, query: &str, theme: &Theme) -> Vec<ListRow<'static, ActionId>> {
+    menu_rows_with_history(menu, query, theme, &FrecencyStore::default(), 0)
+}
+
+fn menu_rows_with_history(
+    menu: &Menu,
+    query: &str,
+    theme: &Theme,
+    history: &FrecencyStore,
+    now: u64,
+) -> Vec<ListRow<'static, ActionId>> {
+    let query = query.trim();
+    if query.is_empty() {
+        let mut rows = Vec::new();
+        let mut recent = menu
+            .groups
+            .iter()
+            .enumerate()
+            .flat_map(|(group_index, group)| {
+                group
+                    .actions
+                    .iter()
+                    .enumerate()
+                    .map(move |(action_index, action)| {
+                        (
+                            action,
+                            history.score(&action.id, now),
+                            group_index,
+                            action_index,
+                        )
+                    })
+            })
+            .filter(|(_, score, _, _)| *score > 0.05)
+            .collect::<Vec<_>>();
+        recent.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.3.cmp(&right.3))
+        });
+        recent.truncate(5);
+        if !recent.is_empty() {
+            rows.push(ListRow {
+                id: ActionId::Separator("recent".to_owned()),
+                label: Line::styled("Recent", theme.style(Role::TextMuted)),
+                trailing: None,
+                role: RowRole::Separator,
+                enabled: false,
+            });
+            rows.extend(recent.into_iter().map(|(action, _, _, _)| ListRow {
+                id: ActionId::Action {
+                    id: action.id.clone(),
+                    recent: true,
+                },
+                label: Line::raw(action.label.clone()),
+                trailing: None,
+                role: RowRole::Item,
+                enabled: true,
+            }));
+        }
+        let mut previous_group = None;
+        for group in &menu.groups {
+            if previous_group != Some(group.id.as_str()) {
+                rows.push(ListRow {
+                    id: ActionId::Separator(group.id.to_owned()),
+                    label: Line::styled(group.title.clone(), theme.style(Role::TextMuted)),
+                    trailing: None,
+                    role: RowRole::Separator,
+                    enabled: false,
                 });
+                previous_group = Some(group.id.as_str());
+            }
+            rows.extend(group.actions.iter().map(|action| ListRow {
+                id: ActionId::Action {
+                    id: action.id.clone(),
+                    recent: false,
+                },
+                label: Line::raw(action.label.clone()),
+                trailing: None,
+                role: RowRole::Item,
+                enabled: true,
+            }));
+        }
+        return rows;
+    }
+
+    search_with_history(&menu.groups, query, history, now)
+        .into_iter()
+        .map(|hit| {
+            let group = &menu.groups[hit.group];
+            let action = &group.actions[hit.action];
+            ListRow {
+                id: ActionId::Action {
+                    id: action.id.clone(),
+                    recent: false,
+                },
+                label: highlighted_hit(group, &hit, theme),
+                trailing: None,
+                role: RowRole::Item,
+                enabled: true,
+            }
+        })
+        .collect()
+}
+
+fn highlighted_hit(group: &GroupSpec, hit: &SearchHit, theme: &Theme) -> Line<'static> {
+    let action = &group.actions[hit.action];
+    let matched: HashSet<_> = hit
+        .indices
+        .iter()
+        .filter_map(|index| usize::try_from(*index).ok())
+        .collect();
+    let keywords = action.keywords.join(" ");
+    let group_start = 0;
+    let label_start = group.title.graphemes(true).count() + 1;
+    let keywords_start = label_start + action.label.graphemes(true).count() + 1;
+    let description_start = keywords_start + keywords.graphemes(true).count() + 1;
+    let mut spans = Vec::new();
+
+    push_highlighted(
+        &mut spans,
+        &group.title,
+        group_start,
+        &matched,
+        Role::TextMuted,
+        theme,
+    );
+    spans.push(Span::styled(" › ", theme.style(Role::TextMuted)));
+    push_highlighted(
+        &mut spans,
+        &action.label,
+        label_start,
+        &matched,
+        Role::Text,
+        theme,
+    );
+    if !keywords.is_empty() {
+        spans.push(Span::styled(" · ", theme.style(Role::TextMuted)));
+        push_highlighted(
+            &mut spans,
+            &keywords,
+            keywords_start,
+            &matched,
+            Role::TextMuted,
+            theme,
+        );
+    }
+    if !action.description.is_empty() {
+        spans.push(Span::styled(" — ", theme.style(Role::TextMuted)));
+        push_highlighted(
+            &mut spans,
+            &action.description,
+            description_start,
+            &matched,
+            Role::TextMuted,
+            theme,
+        );
+    }
+    Line::from(spans)
+}
+
+fn push_highlighted(
+    spans: &mut Vec<Span<'static>>,
+    value: &str,
+    start: usize,
+    matched: &HashSet<usize>,
+    base_role: Role,
+    theme: &Theme,
+) {
+    spans.extend(value.graphemes(true).enumerate().map(|(index, grapheme)| {
+        Span::styled(
+            grapheme.to_owned(),
+            theme.style(if matched.contains(&(start + index)) {
+                Role::Accent
+            } else {
+                base_role
+            }),
+        )
+    }));
+}
+
+fn preview_lines(menu: &Menu, selected: Option<&ActionId>, theme: &Theme) -> Vec<Line<'static>> {
+    let Some(action) = selected.and_then(|id| menu.row_action(id)) else {
+        return vec![Line::styled(
+            if menu.groups.is_empty() {
+                "Scanning providers…"
+            } else {
+                "No action selected"
+            },
+            theme.style(Role::TextMuted),
+        )];
+    };
+    let mut lines = vec![
+        Line::styled(action.label.clone(), theme.style(Role::Accent)),
+        Line::raw(""),
+        Line::styled(action.description.clone(), theme.style(Role::Text)),
+        Line::raw(""),
+        Line::styled("Command", theme.style(Role::TextMuted)),
+    ];
+    lines.extend(
+        action
+            .preview
+            .lines()
+            .map(|line| Line::styled(line.to_owned(), theme.style(Role::TextMuted))),
+    );
+    lines
+}
+
+fn needs_confirmation(action: &ActionSpec) -> bool {
+    action.danger == Danger::Destructive || action.confirm
+}
+
+pub async fn run() -> anyhow::Result<()> {
+    let theme = Theme::tailrocks_phosphor();
+    let mut menu = Menu::default();
+    let mut scans: Option<mpsc::Receiver<ScanEvent>> = None;
+    let mut scanning = true;
+    let mut search_state = TextInputState::new("").with_allow_empty(true);
+    let mut list_state = ListState::new(None::<ActionId>);
+    let mut preview_scroll = DialogScroll::new();
+    let mut preview_focused = false;
+    let mut status_state = StatusBarState::default();
+    let mut pending_confirm: Option<PendingConfirm> = None;
+    let mut history = FrecencyStore::default();
+    let (history_sender, history_receiver) = mpsc::sync_channel(1);
+    let mut history_sender = Some(history_sender);
+    let mut history_loaded = false;
+    let cwd = std::env::current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let confirm_actions = [
+        DialogAction {
+            id: ConfirmChoice::Cancel,
+            label: "Cancel",
+            enabled: true,
+            style: None,
+        },
+        DialogAction {
+            id: ConfirmChoice::Run,
+            label: "Run",
+            enabled: true,
+            style: Some(theme.style(Role::Danger)),
+        },
+    ];
+
+    let mut session = termrock::crossterm::Session::enter(
+        std::io::stdout(),
+        termrock::crossterm::SessionOptions::default(),
+    )?;
+    let backend = CrosstermBackend::new(session.writer_mut());
+    let mut terminal = ratatui::Terminal::new(backend)?;
+
+    let selected_action = loop {
+        if !history_loaded {
+            match history_receiver.try_recv() {
+                Ok(loaded) => {
+                    history = loaded;
+                    history_loaded = true;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => history_loaded = true,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(scans) = scans.as_mut() {
+            loop {
+                match scans.try_recv() {
+                    Ok(ScanEvent::Group {
+                        provider_index,
+                        provider_id,
+                        group,
+                    }) => menu.insert_scanned_group(provider_index, provider_id, group),
+                    Ok(ScanEvent::Warning(warning)) => {
+                        menu.warnings.push(warning);
+                    }
+                    Ok(ScanEvent::Finished) | Err(mpsc::TryRecvError::Disconnected) => {
+                        scanning = false;
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                }
             }
         }
 
-        if probe.in_git_repo && probe.git {
-            current_actions.push(Action {
-                label: "git: pull".into(),
-                description: "Pull latest changes for this repository".into(),
-                preview: "$ git pull".into(),
-                handler: Box::new(|| Box::pin(run_shell("git pull"))),
-            });
-            current_actions.push(Action {
-                label: "git: push".into(),
-                description: "Push commits to remote".into(),
-                preview: "$ git push".into(),
-                handler: Box::new(|| Box::pin(run_shell("git push"))),
-            });
-            current_actions.push(Action {
-                label: "git: status".into(),
-                description: "Show working tree status".into(),
-                preview: "$ git status".into(),
-                handler: Box::new(|| Box::pin(run_shell("git status"))),
-            });
-        }
-
-        if probe.has_gradle_build && probe.gradle {
-            current_actions.push(Action {
-                label: "gradle: clean".into(),
-                description: "Clean build output".into(),
-                preview: "$ gradle clean".into(),
-                handler: Box::new(|| Box::pin(run_shell("gradle clean"))),
-            });
-            current_actions.push(Action {
-                label: "gradle: build".into(),
-                description: "Build the project".into(),
-                preview: "$ gradle build".into(),
-                handler: Box::new(|| Box::pin(run_shell("gradle build"))),
-            });
-            current_actions.push(Action {
-                label: "gradle: test".into(),
-                description: "Run tests".into(),
-                preview: "$ gradle test".into(),
-                handler: Box::new(|| Box::pin(run_shell("gradle test"))),
-            });
-        }
-
-        if probe.has_docker_compose && probe.docker {
-            current_actions.push(Action {
-                label: "compose: up".into(),
-                description: "Start services in background".into(),
-                preview: "$ docker compose up -d".into(),
-                handler: Box::new(|| Box::pin(run_shell("docker compose up -d"))),
-            });
-            current_actions.push(Action {
-                label: "compose: down".into(),
-                description: "Stop and remove containers".into(),
-                preview: "$ docker compose down".into(),
-                handler: Box::new(|| Box::pin(run_shell("docker compose down"))),
-            });
-            current_actions.push(Action {
-                label: "compose: logs".into(),
-                description: "Follow service logs".into(),
-                preview: "$ docker compose logs -f".into(),
-                handler: Box::new(|| Box::pin(run_shell("docker compose logs -f"))),
-            });
-        }
-
-        if probe.has_idea_dir || probe.idea {
-            current_actions.push(Action {
-                label: "idea: clean".into(),
-                description: "Remove .idea dirs and *.iml files".into(),
-                preview:
-                    "find . -name .idea -type d ... | rm -rf\nfind . -name '*.iml' ... | rm -f"
-                        .into(),
-                handler: Box::new(|| Box::pin(crate::commands::idea::clean())),
-            });
-        }
-
-        if !current_actions.is_empty() {
-            groups.push(Group {
-                title: "Current folder".into(),
-                icon: "",
-                actions: current_actions,
-            });
-        }
-
-        // ── Parent folder ────────────────────────────────────────────────
-        if probe.git && probe.parent_git_repos.len() > 1 {
-            let repo_list = probe.parent_git_repos.join(", ");
-            groups.push(Group {
-                title: "Parent folder".into(),
-                icon: "",
-                actions: vec![
-                    Action {
-                        label: "git: pull all repos".into(),
-                        description: format!(
-                            "Pull {} repos in parallel",
-                            probe.parent_git_repos.len()
-                        ),
-                        preview: format!("Repos: {repo_list}\n\n$ git pull (parallel)"),
-                        handler: Box::new(|| Box::pin(crate::commands::git::pull_all())),
-                    },
-                    Action {
-                        label: "git: push all repos".into(),
-                        description: format!(
-                            "Push {} repos in parallel",
-                            probe.parent_git_repos.len()
-                        ),
-                        preview: format!("Repos: {repo_list}\n\n$ git push (parallel)"),
-                        handler: Box::new(|| Box::pin(crate::commands::git::push_all())),
-                    },
-                    Action {
-                        label: "git: status all repos".into(),
-                        description: "Show status of all repos".into(),
-                        preview: format!("Repos: {repo_list}\n\n$ git status --short"),
-                        handler: Box::new(|| Box::pin(crate::commands::git::status_all())),
-                    },
-                    Action {
-                        label: "git: push all remotes".into(),
-                        description: "Push every repo to origin + gitlab".into(),
-                        preview: format!(
-                            "Repos: {repo_list}\n\n$ git push origin\n$ git push gitlab"
-                        ),
-                        handler: Box::new(|| Box::pin(crate::commands::git::push_all_remotes())),
-                    },
-                ],
-            });
-        }
-
-        // ── System ───────────────────────────────────────────────────────
-        let mut system_actions: Vec<Action> = Vec::new();
-
-        if probe.brew || probe.mise || probe.amp || probe.omz {
-            system_actions.push(Action {
-                label: "upgrade: everything".into(),
-                description: "Upgrade all detected tools in parallel".into(),
-                preview: build_upgrade_preview(probe),
-                handler: Box::new(|| Box::pin(crate::commands::upgrade::run_all())),
-            });
-        }
-        if probe.brew {
-            system_actions.push(Action {
-                label: "upgrade: brew packages".into(),
-                description: "brew update && brew upgrade".into(),
-                preview: "$ brew update\n$ brew upgrade --greedy\n$ brew cleanup\n$ brew autoremove\n$ brew doctor".into(),
-                handler: Box::new(|| Box::pin(crate::commands::upgrade::run_brew())),
-            });
-            system_actions.push(Action {
-                label: "upgrade: brew casks".into(),
-                description: "Upgrade GUI apps via Homebrew".into(),
-                preview: "$ brew update\n$ brew upgrade --cask --greedy\n$ brew cleanup\n$ brew autoremove\n$ brew doctor".into(),
-                handler: Box::new(|| Box::pin(crate::commands::upgrade::run_brew_casks())),
-            });
-        }
-        if probe.mise {
-            system_actions.push(Action {
-                label: "upgrade: mise tools".into(),
-                description: "Upgrade all mise-managed tools".into(),
-                preview: "$ mise upgrade".into(),
-                handler: Box::new(|| Box::pin(crate::commands::upgrade::run_mise())),
-            });
-        }
-        if probe.amp {
-            system_actions.push(Action {
-                label: "upgrade: amp".into(),
-                description: "Upgrade Amp CLI".into(),
-                preview: "$ amp update".into(),
-                handler: Box::new(|| Box::pin(crate::commands::upgrade::run_amp())),
-            });
-        }
-        if probe.omz {
-            system_actions.push(Action {
-                label: "upgrade: oh-my-zsh".into(),
-                description: "Update oh-my-zsh to latest version".into(),
-                preview: "$ omz update".into(),
-                handler: Box::new(|| Box::pin(crate::commands::upgrade::run_omz())),
-            });
-        }
-        if probe.docker {
-            system_actions.push(Action {
-                label: "docker: stop all containers".into(),
-                description: "Stop and remove all running containers".into(),
-                preview: "$ docker ps -qa | xargs docker stop\n$ docker ps -qa | xargs docker rm"
-                    .into(),
-                handler: Box::new(|| Box::pin(crate::commands::docker::stop_all())),
-            });
-            system_actions.push(Action {
-                label: "docker: clean everything".into(),
-                description: "Stop/remove containers, force-remove all images, prune networks/system/volumes (matches legacy docker_clean_all)".into(),
-                preview: "$ docker ps -qa | xargs docker stop\n$ docker ps -qa | xargs docker rm\n$ docker rmi --force $(docker images -qa)\n$ docker network rm ...\n$ docker system prune --force\n$ docker volume prune --force".into(),
-                handler: Box::new(|| Box::pin(crate::commands::docker::clean())),
-            });
-        }
-        if probe.gradle {
-            system_actions.push(Action {
-                label: "gradle: clean all".into(),
-                description: "Stop daemon and clean all build dirs recursively".into(),
-                preview: "$ gradle --stop\n$ find . -name .gradle -exec rm -rf\n$ find . -name build -exec rm -rf".into(),
-                handler: Box::new(|| Box::pin(crate::commands::gradle::clean())),
-            });
-        }
-
-        if !system_actions.is_empty() {
-            groups.push(Group {
-                title: "System".into(),
-                icon: "",
-                actions: system_actions,
-            });
-        }
-
-        Self { groups }
-    }
-}
-
-fn build_upgrade_preview(probe: &Probe) -> String {
-    let mut lines = vec!["Runs in parallel:".to_string()];
-    if probe.omz {
-        lines.push("  $ omz update".into());
-    }
-    if probe.mise {
-        lines.push("  $ mise upgrade".into());
-    }
-    if probe.amp {
-        lines.push("  $ amp update".into());
-    }
-    if probe.brew {
-        lines.push("  $ brew update && brew upgrade --greedy && brew cleanup && brew autoremove && brew doctor".into());
-    }
-    lines.join("\n")
-}
-
-async fn run_shell(cmd: &str) -> anyhow::Result<()> {
-    use crate::tui::{TaskDef, run_tasks};
-    run_tasks(vec![TaskDef {
-        label: cmd.to_owned(),
-        program: "sh".into(),
-        args: vec!["-c".into(), cmd.to_owned()],
-    }])
-    .await
-}
-
-pub async fn run(menu: Menu) -> anyhow::Result<()> {
-    if menu.groups.is_empty() {
-        println!("No supported tools or context detected.");
-        return Ok(());
-    }
-
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let mut group_idx: usize = 0;
-    let mut action_idx: usize = 0;
-    let mut focus_left = true;
-    let mut group_state = ListState::default();
-    let mut action_state = ListState::default();
-    group_state.select(Some(0));
-    action_state.select(Some(0));
-
-    let result = loop {
-        let groups = &menu.groups;
-        let current_group = &groups[group_idx];
-        let action_count = current_group.actions.len();
-
-        terminal.draw(|f| {
-            let area = f.area();
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(3),
-                    Constraint::Min(0),
-                    Constraint::Length(3),
-                ])
-                .split(area);
-
-            // header
-            let cwd = std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            let header = Paragraph::new(Line::from(vec![
-                Span::styled(
-                    " holla ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(&cwd, Style::default().fg(Color::DarkGray)),
-            ]))
-            .block(Block::default().borders(Borders::ALL));
-            f.render_widget(header, chunks[0]);
-
-            // body: scope | actions | preview
-            let body = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(20),
-                    Constraint::Percentage(40),
-                    Constraint::Percentage(40),
-                ])
-                .split(chunks[1]);
-
-            render_groups(
-                f,
-                body[0],
-                groups,
-                group_idx,
-                focus_left,
-                &mut group_state.clone(),
+        let rows = menu_rows_with_history(
+            &menu,
+            search_state.value(),
+            &theme,
+            &history,
+            now_epoch_secs(),
+        );
+        if !rows
+            .iter()
+            .any(|row| row.enabled && list_state.selected().is_some_and(|id| id == &row.id))
+        {
+            list_state.select(
+                rows.iter()
+                    .find(|row| row.enabled)
+                    .map(|row| row.id.clone()),
             );
-            render_actions(
-                f,
-                body[1],
-                current_group,
-                action_idx,
-                !focus_left,
-                &mut action_state.clone(),
-            );
-            render_preview(f, body[2], current_group, action_idx);
+        }
+        list_state.set_focused(!preview_focused);
+        let preview = preview_lines(&menu, list_state.selected(), &theme);
+        let preview_width = max_line_width(&preview);
+        let mut preview_viewport = (0usize, 0usize);
 
-            // footer
-            let footer = Paragraph::new(Line::from(vec![
-                Span::styled(" ↑↓ ", Style::default().fg(Color::DarkGray)),
-                Span::raw("navigate  "),
-                Span::styled("→/Enter ", Style::default().fg(Color::DarkGray)),
-                Span::raw("select  "),
-                Span::styled("← ", Style::default().fg(Color::DarkGray)),
-                Span::raw("back  "),
-                Span::styled("q ", Style::default().fg(Color::DarkGray)),
-                Span::raw("quit"),
-            ]))
-            .block(Block::default().borders(Borders::ALL));
-            f.render_widget(footer, chunks[2]);
+        terminal.draw(|frame| {
+            let [header_area, search_area, body_area, footer_area] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
+            .areas(frame.area());
+            let [list_area, preview_area] =
+                Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .areas(body_area);
+            let context = if scanning {
+                if cwd.is_empty() {
+                    "scanning…".to_owned()
+                } else {
+                    format!("scanning… · {cwd}")
+                }
+            } else {
+                cwd.clone()
+            };
+            let left_slots = [StatusSlot {
+                id: HeaderSlot::Product,
+                content: " holla ",
+                priority: 2,
+                min_width: 0,
+                enabled: true,
+                style: theme.style(Role::Accent),
+                hover_style: None,
+            }];
+            let right_slots = [StatusSlot {
+                id: HeaderSlot::Context,
+                content: &context,
+                priority: 1,
+                min_width: 8,
+                enabled: !context.is_empty(),
+                style: theme.style(Role::TextMuted),
+                hover_style: None,
+            }];
+            frame.render_stateful_widget(
+                &StatusBar::new(&left_slots, &right_slots, &theme).alpha(1.0),
+                header_area,
+                &mut status_state,
+            );
+            frame.render_stateful_widget(
+                &TextInput::new("Search", &theme)
+                    .placeholder("Search actions…")
+                    .validation(Validation::Valid),
+                search_area,
+                &mut search_state,
+            );
+
+            let list_panel = Panel::new(&theme)
+                .title(" holla ")
+                .emphasis(if preview_focused {
+                    PanelEmphasis::Normal
+                } else {
+                    PanelEmphasis::Focused
+                });
+            let list_inner = list_panel.inner(list_area);
+            frame.render_widget(&list_panel, list_area);
+            frame.render_stateful_widget(&List::new(&rows, &theme), list_inner, &mut list_state);
+
+            preview_viewport = (
+                usize::from(preview_area.height.saturating_sub(2)),
+                usize::from(preview_area.width.saturating_sub(2)),
+            );
+            frame.render_stateful_widget(
+                &Viewport::new(&preview, &theme)
+                    .title("Preview")
+                    .emphasis(if preview_focused {
+                        PanelEmphasis::Focused
+                    } else {
+                        PanelEmphasis::Normal
+                    })
+                    .content_style(theme.style(Role::Text)),
+                preview_area,
+                &mut preview_scroll,
+            );
+            render_hint_bar(frame, footer_area, &MENU_KEYMAP.hint_spans(), &theme);
+            if let Some(warning) = menu.warnings.last() {
+                frame.render_widget(Toast::new(&theme, warning, Severity::Warning), frame.area());
+            }
+
+            if let Some(pending) = pending_confirm.as_mut()
+                && let Some(action) = menu.action(&pending.action_id)
+            {
+                let mut body = vec![
+                    Line::styled(action.description.clone(), theme.style(Role::Text)),
+                    Line::raw(""),
+                ];
+                body.extend(
+                    action
+                        .preview
+                        .lines()
+                        .map(|line| Line::styled(line.to_owned(), theme.style(Role::TextMuted))),
+                );
+                body.push(Line::raw(""));
+                let warning = Line::styled(
+                    if action.danger == Danger::Destructive {
+                        "Warning: this deletes local data."
+                    } else {
+                        "This action explicitly requires confirmation."
+                    },
+                    theme.style(Role::Warning),
+                );
+                body.push(warning.clone());
+                frame.render_widget(Backdrop::default(), frame.area());
+                let area = centered_rect(68, 18, frame.area());
+                let max_body_lines = usize::from(area.height.saturating_sub(4));
+                if body.len() > max_body_lines {
+                    body.truncate(max_body_lines.saturating_sub(1));
+                    if max_body_lines > 0 {
+                        body.push(warning);
+                    }
+                }
+                frame.render_stateful_widget(
+                    &ChoiceDialog::new(
+                        Dialog::new("Confirm action", Text::from(body), &theme)
+                            .style(theme.style(Role::Text))
+                            .emphasis(PanelEmphasis::Focused),
+                        &confirm_actions,
+                    )
+                    .gap("  "),
+                    area,
+                    &mut pending.state,
+                );
+            }
         })?;
 
-        if event::poll(Duration::from_millis(100))?
+        if scans.is_none() {
+            // First frame is now visible. Only then may blocking provider work start.
+            scans = Some(providers::spawn_scans());
+            if let Some(sender) = history_sender.take() {
+                std::thread::Builder::new()
+                    .name("holla-history-load".into())
+                    .spawn(move || {
+                        let _ = sender.send(FrecencyStore::load());
+                    })?;
+            }
+            continue;
+        }
+
+        if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
         {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
-            match key.code {
-                KeyCode::Char('q') => break None,
-                KeyCode::Up => {
-                    if focus_left {
-                        group_idx = group_idx.saturating_sub(1);
-                        action_idx = 0;
-                    } else {
-                        action_idx = action_idx.saturating_sub(1);
+            let key = termrock::input::KeyEvent::from(key);
+            if let Some(pending) = pending_confirm.as_mut() {
+                match pending.state.handle_key(&confirm_actions, key) {
+                    Outcome::Activated(ConfirmChoice::Run) => {
+                        break Some(pending.action_id.clone());
+                    }
+                    Outcome::Activated(ConfirmChoice::Cancel) | Outcome::Cancelled => {
+                        pending_confirm = None;
+                    }
+                    Outcome::Ignored | Outcome::Changed => {}
+                    _ => {}
+                }
+                continue;
+            }
+
+            if key.code == termrock::input::KeyCode::Esc {
+                if search_state.value().is_empty() {
+                    break None;
+                }
+                search_state = TextInputState::new("").with_allow_empty(true);
+                list_state.select(None);
+                continue;
+            }
+
+            if matches!(
+                key.code,
+                termrock::input::KeyCode::Char(_)
+                    | termrock::input::KeyCode::Backspace
+                    | termrock::input::KeyCode::Delete
+            ) {
+                if search_state.handle_key(key) == TextInputOutcome::Changed {
+                    list_state.select(None);
+                    preview_scroll = DialogScroll::new();
+                }
+                continue;
+            }
+
+            if preview_focused {
+                if matches!(
+                    key.code,
+                    termrock::input::KeyCode::Tab | termrock::input::KeyCode::Left
+                ) {
+                    preview_focused = false;
+                } else {
+                    preview_scroll.handle_key(
+                        key,
+                        preview.len(),
+                        preview_viewport.0,
+                        preview_width,
+                        preview_viewport.1,
+                    );
+                }
+                continue;
+            }
+
+            match list_state.handle_key(&rows, key) {
+                Outcome::Activated(id) => {
+                    if let Some(action) = menu.row_action(&id) {
+                        let action_id = action.id.clone();
+                        if needs_confirmation(action) {
+                            pending_confirm = Some(PendingConfirm {
+                                action_id,
+                                state: ChoiceDialogState::new(Some(ConfirmChoice::Cancel)),
+                            });
+                        } else {
+                            break Some(action_id);
+                        }
                     }
                 }
-                KeyCode::Down => {
-                    if focus_left {
-                        group_idx = (group_idx + 1).min(menu.groups.len().saturating_sub(1));
-                        action_idx = 0;
-                    } else {
-                        action_idx = (action_idx + 1).min(action_count.saturating_sub(1));
-                    }
-                }
-                KeyCode::Right | KeyCode::Tab => focus_left = false,
-                KeyCode::Left => focus_left = true,
-                KeyCode::Enter => {
-                    if focus_left {
-                        focus_left = false;
-                    } else {
-                        break Some((group_idx, action_idx));
+                Outcome::Changed => preview_scroll = DialogScroll::new(),
+                Outcome::Cancelled => break None,
+                Outcome::Ignored => {
+                    if matches!(
+                        key.code,
+                        termrock::input::KeyCode::Tab | termrock::input::KeyCode::Right
+                    ) {
+                        preview_focused = true;
                     }
                 }
                 _ => {}
@@ -434,138 +699,456 @@ pub async fn run(menu: Menu) -> anyhow::Result<()> {
         }
     };
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-
-    if let Some((gi, ai)) = result {
-        (menu.groups[gi].actions[ai].handler)().await?;
+    drop(terminal);
+    session.restore()?;
+    if let Some(id) = selected_action
+        && let Some(action) = menu.action(&id)
+    {
+        if !history_loaded {
+            history =
+                tokio::task::spawn_blocking(move || history_receiver.recv().unwrap_or_default())
+                    .await
+                    .unwrap_or_default();
+        }
+        let now = now_epoch_secs();
+        history.record(&id, search_state.value(), now);
+        let save = tokio::task::spawn_blocking(move || history.save(now));
+        let action_result = (action.run)().await;
+        match save.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => eprintln!("holla: could not save action history: {error}"),
+            Err(error) => eprintln!("holla: action history task failed: {error}"),
+        }
+        action_result?;
     }
-
     Ok(())
 }
 
-fn render_groups(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    groups: &[Group],
-    selected: usize,
-    focused: bool,
-    state: &mut ListState,
-) {
-    state.select(Some(selected));
-    let items: Vec<ListItem> = groups
-        .iter()
-        .map(|g| {
-            ListItem::new(Line::from(vec![
-                Span::raw(format!("{} ", g.icon)),
-                Span::raw(&g.title),
-            ]))
-        })
-        .collect();
-
-    let border_style = if focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        model::ActionFuture,
+        probe::{MiseTask, Probe},
+        providers::groups_from_probe,
     };
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(" Scope "),
-        )
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
+    fn menu(probe: &Probe) -> Menu {
+        Menu::from_groups(groups_from_probe(probe))
+    }
 
-    f.render_stateful_widget(list, area, state);
-}
+    fn actions<'a>(menu: &'a Menu, title: &str) -> Vec<&'a ActionSpec> {
+        menu.groups
+            .iter()
+            .filter(|group| group.title == title)
+            .flat_map(|group| &group.actions)
+            .collect()
+    }
 
-fn render_actions(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    group: &Group,
-    selected: usize,
-    focused: bool,
-    state: &mut ListState,
-) {
-    state.select(Some(selected));
-    let items: Vec<ListItem> = group
-        .actions
-        .iter()
-        .map(|a| ListItem::new(Line::raw(&a.label)))
-        .collect();
+    fn labels<'a>(menu: &'a Menu, title: &str) -> Vec<&'a str> {
+        actions(menu, title)
+            .into_iter()
+            .map(|action| action.label.as_str())
+            .collect()
+    }
 
-    let border_style = if focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
+    #[test]
+    fn empty_probe_still_builds_always_available_groups() {
+        let menu = menu(&Probe::empty());
+        assert_eq!(menu.groups.len(), 3);
+        assert_eq!(menu.groups[0].id, "find");
+        assert_eq!(menu.groups[1].id, "disk");
+        assert_eq!(menu.groups[2].id, "cleanup");
+    }
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(format!(" {} {} ", group.icon, group.title)),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(Color::Cyan)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
+    #[test]
+    fn docker_probe_builds_system_cleanup_actions() {
+        let mut probe = Probe::empty();
+        probe.docker = true;
+        let menu = menu(&probe);
 
-    f.render_stateful_widget(list, area, state);
-}
+        assert!(labels(&menu, "System").contains(&"docker: stop all containers"));
+        assert!(labels(&menu, "System").contains(&"docker: clean everything"));
+        assert!(labels(&menu, "System").contains(&"docker: prune builder cache"));
+    }
 
-fn render_preview(f: &mut ratatui::Frame, area: Rect, group: &Group, selected: usize) {
-    let action = &group.actions[selected];
+    #[test]
+    fn git_repo_builds_current_folder_actions() {
+        let mut probe = Probe::empty();
+        probe.git = true;
+        probe.in_git_repo = true;
+        let menu = menu(&probe);
 
-    let text = vec![
-        Line::from(Span::styled(
-            &action.label,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::raw(""),
-        Line::from(Span::styled(
-            &action.description,
-            Style::default().fg(Color::White),
-        )),
-        Line::raw(""),
-        Line::from(Span::styled(
-            "Command",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::UNDERLINED),
-        )),
-    ]
-    .into_iter()
-    .chain(action.preview.lines().map(|l| {
-        Line::from(Span::styled(
-            l.to_owned(),
-            Style::default().fg(Color::Yellow),
-        ))
-    }))
-    .collect::<Vec<_>>();
+        assert!(labels(&menu, "Current folder").contains(&"git: pull"));
+        assert!(labels(&menu, "Current folder").contains(&"git: push"));
+        assert!(labels(&menu, "Current folder").contains(&"git: status"));
+    }
 
-    let paragraph = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Preview "),
-        )
-        .wrap(Wrap { trim: false });
+    #[test]
+    fn mise_task_builds_action_with_command_preview() {
+        let mut probe = Probe::empty();
+        probe.mise_tasks.push(MiseTask {
+            name: "build".into(),
+            description: "Build app".into(),
+        });
+        let menu = menu(&probe);
+        let action = actions(&menu, "Current folder")
+            .into_iter()
+            .find(|action| action.label == "mise: build")
+            .expect("mise action");
 
-    f.render_widget(paragraph, area);
+        assert_eq!(action.id, "mise.task.build");
+        assert_eq!(action.preview, "$ mise run build");
+    }
+
+    #[test]
+    fn multiple_child_repositories_build_repo_group() {
+        let mut probe = Probe::empty();
+        probe.git = true;
+        probe.child_git_repos = vec!["beta".into(), "alpha".into()];
+
+        assert_eq!(
+            labels(&menu(&probe), "Repos in this folder"),
+            [
+                "git: pull all repos",
+                "git: push all repos",
+                "git: status all repos",
+                "git: push all remotes",
+            ]
+        );
+    }
+
+    #[test]
+    fn single_child_repository_does_not_build_repo_group() {
+        let mut probe = Probe::empty();
+        probe.git = true;
+        probe.child_git_repos = vec!["alpha".into()];
+
+        assert!(actions(&menu(&probe), "Repos in this folder").is_empty());
+    }
+
+    #[test]
+    fn omz_directory_builds_upgrade_action() {
+        let mut probe = Probe::empty();
+        probe.omz_dir = Some("/tmp/.oh-my-zsh".into());
+        let menu = menu(&probe);
+        let action = actions(&menu, "System")
+            .into_iter()
+            .find(|action| action.label == "upgrade: oh-my-zsh")
+            .expect("oh-my-zsh action");
+
+        assert_eq!(action.preview, "$ sh ~/.oh-my-zsh/tools/upgrade.sh");
+    }
+
+    #[test]
+    fn missing_omz_directory_omits_upgrade_action() {
+        assert!(
+            actions(&menu(&Probe::empty()), "System")
+                .into_iter()
+                .all(|action| action.label != "upgrade: oh-my-zsh")
+        );
+    }
+
+    #[test]
+    fn compose_logs_action_is_bounded() {
+        let mut probe = Probe::empty();
+        probe.docker = true;
+        probe.has_docker_compose = true;
+        let menu = menu(&probe);
+        let action = actions(&menu, "Current folder")
+            .into_iter()
+            .find(|action| action.label == "compose: logs")
+            .expect("compose logs action");
+
+        assert_eq!(action.description, "Show recent service logs");
+        assert_eq!(action.preview, "$ docker compose logs --tail 200");
+        assert_eq!(action.danger, Danger::Safe);
+    }
+
+    #[test]
+    fn idea_cleanup_is_destructive() {
+        let mut probe = Probe::empty();
+        probe.has_idea_dir = true;
+        let menu = menu(&probe);
+        let action = menu.action("idea.clean").expect("idea clean action");
+
+        assert_eq!(action.danger, Danger::Destructive);
+    }
+
+    #[test]
+    fn every_action_id_is_nonempty_and_unique() {
+        let mut probe = Probe::empty();
+        probe.git = true;
+        probe.docker = true;
+        probe.gradle = true;
+        probe.mise = true;
+        probe.brew = true;
+        probe.amp = true;
+        probe.idea = true;
+        probe.in_git_repo = true;
+        probe.has_docker_compose = true;
+        probe.has_gradle_build = true;
+        probe.child_git_repos = vec!["alpha".into(), "beta".into()];
+        probe.mise_tasks = vec![
+            MiseTask {
+                name: "build".into(),
+                description: String::new(),
+            },
+            MiseTask {
+                name: "test".into(),
+                description: String::new(),
+            },
+        ];
+        let menu = menu(&probe);
+        let ids: Vec<_> = menu
+            .groups
+            .iter()
+            .flat_map(|group| &group.actions)
+            .map(|action| action.id.as_str())
+            .collect();
+        let unique: HashSet<_> = ids.iter().copied().collect();
+
+        assert!(ids.iter().all(|id| !id.is_empty()));
+        assert_eq!(ids.len(), unique.len());
+    }
+
+    fn test_action(id: &str, label: &str, danger: Danger) -> ActionSpec {
+        let run = || -> ActionFuture { Box::pin(async { Ok(()) }) };
+        ActionSpec::new(id, label, "", "", &[], danger, run)
+    }
+
+    fn searchable_action(
+        id: &str,
+        label: &str,
+        description: &str,
+        keywords: &'static [&'static str],
+    ) -> ActionSpec {
+        let run = || -> ActionFuture { Box::pin(async { Ok(()) }) };
+        ActionSpec::new(id, label, description, "", keywords, Danger::Safe, run)
+    }
+
+    fn has_accent(row: &ListRow<'_, ActionId>, theme: &Theme) -> bool {
+        row.label
+            .spans
+            .iter()
+            .any(|span| span.style == theme.style(Role::Accent))
+    }
+
+    fn row_id(id: &ActionId) -> String {
+        match id {
+            ActionId::Separator(id) => format!("separator:{id}"),
+            ActionId::Action { id, recent: true } => format!("recent:{id}"),
+            ActionId::Action { id, recent: false } => id.clone(),
+        }
+    }
+
+    #[test]
+    fn menu_rows_flatten_groups_and_actions_with_stable_ids() {
+        let menu = Menu::from_groups(vec![
+            GroupSpec {
+                id: "first".into(),
+                title: "First".into(),
+                actions: vec![
+                    test_action("one", "one", Danger::Safe),
+                    test_action("two", "two", Danger::Safe),
+                ],
+            },
+            GroupSpec {
+                id: "second".into(),
+                title: "Second".into(),
+                actions: vec![
+                    test_action("three", "three", Danger::Safe),
+                    test_action("four", "four", Danger::Safe),
+                ],
+            },
+        ]);
+        let rows = menu_rows(&menu, "", &Theme::default());
+
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[0].role, RowRole::Separator);
+        assert!(!rows[0].enabled);
+        assert_eq!(row_id(&rows[1].id), "one");
+        assert_eq!(rows[1].role, RowRole::Item);
+        assert!(rows[1].enabled);
+        assert_eq!(row_id(&rows[5].id), "four");
+    }
+
+    #[test]
+    fn whitespace_only_query_keeps_grouped_projection() {
+        let menu = Menu::from_groups(vec![GroupSpec {
+            id: "first".into(),
+            title: "First".into(),
+            actions: vec![test_action("one", "one", Danger::Safe)],
+        }]);
+
+        let rows = menu_rows(&menu, " \t ", &Theme::default());
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].role, RowRole::Separator);
+        assert_eq!(row_id(&rows[1].id), "one");
+    }
+
+    #[test]
+    fn adjacent_provider_contributions_share_one_group_header() {
+        let menu = Menu::from_groups(vec![
+            GroupSpec {
+                id: "system".into(),
+                title: "System".into(),
+                actions: vec![test_action("one", "one", Danger::Safe)],
+            },
+            GroupSpec {
+                id: "system".into(),
+                title: "System".into(),
+                actions: vec![test_action("two", "two", Danger::Safe)],
+            },
+        ]);
+
+        let rows = menu_rows(&menu, "", &Theme::default());
+
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.role == RowRole::Separator)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn recent_projection_precedes_normal_groups_and_keeps_normal_action() {
+        let menu = Menu::from_groups(vec![GroupSpec {
+            id: "first".into(),
+            title: "First".into(),
+            actions: vec![test_action("one", "one", Danger::Safe)],
+        }]);
+        let mut history = FrecencyStore::default();
+        history.record("one", "", 100);
+
+        let rows = menu_rows_with_history(&menu, "", &Theme::default(), &history, 100);
+
+        assert_eq!(row_id(&rows[0].id), "separator:recent");
+        assert_eq!(row_id(&rows[1].id), "recent:one");
+        assert_eq!(row_id(&rows[2].id), "separator:first");
+        assert_eq!(row_id(&rows[3].id), "one");
+        assert_ne!(rows[1].id, rows[3].id);
+        assert_eq!(menu.row_action(&rows[1].id).unwrap().id, "one");
+    }
+
+    #[test]
+    fn recent_projection_is_limited_to_five_actions() {
+        let menu = Menu::from_groups(vec![GroupSpec {
+            id: "first".into(),
+            title: "First".into(),
+            actions: (0..6)
+                .map(|index| test_action(&format!("action-{index}"), "action", Danger::Safe))
+                .collect(),
+        }]);
+        let mut history = FrecencyStore::default();
+        for index in 0..6 {
+            history.record(&format!("action-{index}"), "", 100 + index);
+        }
+
+        let rows = menu_rows_with_history(&menu, "", &Theme::default(), &history, 106);
+
+        assert_eq!(
+            rows.iter()
+                .take_while(|row| row_id(&row.id) != "separator:first")
+                .count(),
+            6
+        );
+    }
+
+    #[test]
+    fn fuzzy_highlight_keeps_combining_graphemes_atomic() {
+        let menu = Menu::from_groups(vec![GroupSpec {
+            id: "unicode".into(),
+            title: "Unicode".into(),
+            actions: vec![test_action("accent", "e\u{301}clair", Danger::Safe)],
+        }]);
+
+        let rows = menu_rows(&menu, "e", &Theme::default());
+
+        assert!(
+            rows[0]
+                .label
+                .spans
+                .iter()
+                .any(|span| span.content == "e\u{301}")
+        );
+    }
+
+    #[test]
+    fn group_and_keyword_matches_have_visible_accents() {
+        let theme = Theme::default();
+        let menu = Menu::from_groups(vec![GroupSpec {
+            id: "docker".into(),
+            title: "Docker".into(),
+            actions: vec![searchable_action(
+                "docker.stop",
+                "stop containers",
+                "Stop running containers",
+                &["cleanup"],
+            )],
+        }]);
+
+        assert!(has_accent(&menu_rows(&menu, "dock", &theme)[0], &theme));
+        assert!(has_accent(&menu_rows(&menu, "cleanup", &theme)[0], &theme));
+    }
+
+    #[test]
+    fn destructive_actions_are_the_only_actions_requiring_confirmation() {
+        assert!(!needs_confirmation(&test_action(
+            "safe",
+            "safe",
+            Danger::Safe
+        )));
+        assert!(!needs_confirmation(&test_action(
+            "mutating",
+            "mutating",
+            Danger::Mutating
+        )));
+        assert!(needs_confirmation(&test_action(
+            "destructive",
+            "destructive",
+            Danger::Destructive
+        )));
+    }
+
+    #[test]
+    fn docker_clean_all_is_destructive() {
+        let mut probe = Probe::empty();
+        probe.docker = true;
+        let menu = menu(&probe);
+        let action = menu
+            .action("docker.clean-all")
+            .expect("docker clean action");
+
+        assert_eq!(action.danger, Danger::Destructive);
+    }
+
+    #[test]
+    fn out_of_order_scan_arrivals_are_inserted_in_provider_order() {
+        let mut menu = Menu::default();
+        menu.insert_scanned_group(
+            4,
+            "late-provider",
+            GroupSpec {
+                id: "late".into(),
+                title: "Late".into(),
+                actions: vec![],
+            },
+        );
+        menu.insert_scanned_group(
+            1,
+            "early-provider",
+            GroupSpec {
+                id: "early".into(),
+                title: "Early".into(),
+                actions: vec![],
+            },
+        );
+
+        assert_eq!(menu.provider_orders, [1, 4]);
+        assert_eq!(menu.provider_ids, ["early-provider", "late-provider"]);
+        assert_eq!(menu.groups[0].id, "early");
+    }
 }

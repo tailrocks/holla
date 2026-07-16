@@ -1,23 +1,7 @@
-use crate::tui::{TaskDef, run_tasks};
+use crate::commands::cleanup_paths;
 
 pub async fn clean() -> anyhow::Result<()> {
-    run_tasks(vec![
-        TaskDef {
-            label: "Removing .idea dirs".into(),
-            program: "sh".into(),
-            args: vec![
-                "-c".into(),
-                "find . -name .idea -type d -maxdepth 5 -not -path '*/node_modules/*' -exec rm -rf {} +".into(),
-            ],
-        },
-        TaskDef {
-            label: "Removing *.iml files".into(),
-            program: "sh".into(),
-            args: vec![
-                "-c".into(),
-                "find . -name '*.iml' -type f -not -path '*/node_modules/*' -exec rm -f {} +".into(),
-            ],
-        },
-    ])
-    .await
+    let root = std::env::current_dir()?;
+    let items = cleanup_paths::discover(&root, &[".idea"], &["iml"], 5);
+    cleanup_paths::move_to_trash(items).await
 }
