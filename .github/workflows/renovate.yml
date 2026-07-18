@@ -8,10 +8,26 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      lanes:
+        description: velnor (default) | github | both
+        type: choice
+        default: velnor
+        options: [velnor, github, both]
+
+concurrency:
+  group: renovate-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   renovate:
-    runs-on: ubuntu-26.04
+    name: Renovate (${{ matrix.config.lane }})
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -33,6 +49,7 @@ jobs:
           sudo chmod -R a+rwX /tmp/renovate
 
       - name: Self-hosted Renovate
+        if: matrix.config.writer
         # The PAT named "tailrocks-renovate" (fine-grained, not classic) must be
         # stored in the repo secret GH_RENOVATE_TOKEN.
         uses: renovatebot/github-action@22e0a16091fc706b04affe6ae53d5e3358ac4023 # v46.1.19
