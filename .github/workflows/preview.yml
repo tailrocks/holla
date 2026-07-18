@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  source-changed:
+  audit:
     name: Classify preview source (${{ matrix.config.lane }})
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
@@ -144,10 +144,10 @@ jobs:
             echo "version=${base_version}-preview.${commit_count}+${short_sha}"
           } >> "$GITHUB_OUTPUT"
 
-  build-preview:
+  rust:
     name: Build preview (${{ matrix.target }}, ${{ matrix.config.lane }})
-    needs: source-changed
-    if: needs.source-changed.outputs.source == 'true'
+    needs: audit
+    if: needs.audit.outputs.source == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -164,7 +164,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ needs.source-changed.outputs.sha }}
+          ref: ${{ needs.audit.outputs.sha }}
           persist-credentials: false
 
       - id: sccache
@@ -199,7 +199,7 @@ jobs:
 
       - name: Build
         env:
-          HOLLA_VERSION_OVERRIDE: ${{ needs.source-changed.outputs.version }}
+          HOLLA_VERSION_OVERRIDE: ${{ needs.audit.outputs.version }}
         run: |
           cargo zigbuild --release --locked --target ${{ matrix.target }}
 
@@ -220,10 +220,10 @@ jobs:
             holla-${{ matrix.target }}.tar.gz
             holla-${{ matrix.target }}.tar.gz.sha256
 
-  publish-preview:
+  release:
     name: Publish preview (${{ matrix.config.lane }})
-    needs: [source-changed, build-preview]
-    if: needs.source-changed.outputs.source == 'true'
+    needs: [audit, rust]
+    if: needs.audit.outputs.source == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -235,7 +235,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ needs.source-changed.outputs.sha }}
+          ref: ${{ needs.audit.outputs.sha }}
           persist-credentials: false
           fetch-depth: 0 # build the preview PR's source commit range
 
@@ -248,7 +248,7 @@ jobs:
         if: github.event_name == 'workflow_run'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          FULL_SHA: ${{ needs.source-changed.outputs.sha }}
+          FULL_SHA: ${{ needs.audit.outputs.sha }}
         run: |
           compare_status=$(
             curl -fsSL \
@@ -269,9 +269,9 @@ jobs:
       - name: Compute preview metadata
         id: meta
         env:
-          FULL_SHA: ${{ needs.source-changed.outputs.sha }}
-          SHORT_SHA: ${{ needs.source-changed.outputs.short_sha }}
-          VERSION: ${{ needs.source-changed.outputs.version }}
+          FULL_SHA: ${{ needs.audit.outputs.sha }}
+          SHORT_SHA: ${{ needs.audit.outputs.short_sha }}
+          VERSION: ${{ needs.audit.outputs.version }}
         run: |
           {
             echo "full_sha=$FULL_SHA"
@@ -292,7 +292,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.meta.outputs.version }}
-          SHA: ${{ needs.source-changed.outputs.sha }}
+          SHA: ${{ needs.audit.outputs.sha }}
         run: |
           set -euo pipefail
           notes="Preview build from [${SHA:0:7}](https://github.com/${GITHUB_REPOSITORY}/commit/${SHA})."

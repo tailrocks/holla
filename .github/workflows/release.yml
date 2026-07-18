@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  check-version:
+  audit:
     name: Check version (${{ matrix.config.lane }})
     strategy:
       fail-fast: false
@@ -59,9 +59,9 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-  test:
+  integration:
     name: Test release (${{ matrix.config.lane }})
-    needs: check-version
+    needs: audit
     strategy:
       fail-fast: false
       matrix:
@@ -104,9 +104,9 @@ jobs:
 
       - run: cargo nextest run --all-features --no-tests=pass
 
-  build:
+  rust:
     name: Build release (${{ matrix.target }}, ${{ matrix.config.lane }})
-    needs: [check-version, test]
+    needs: [audit, integration]
     strategy:
       fail-fast: false
       matrix:
@@ -115,7 +115,7 @@ jobs:
     runs-on: ${{ matrix.config.runner }}
     timeout-minutes: 45
     env:
-      VERSION: ${{ needs.check-version.outputs.version }}
+      VERSION: ${{ needs.audit.outputs.version }}
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
       RUSTC_WRAPPER: sccache
@@ -158,7 +158,7 @@ jobs:
 
       - name: Build
         env:
-          HOLLA_VERSION_OVERRIDE: ${{ needs.check-version.outputs.version }}
+          HOLLA_VERSION_OVERRIDE: ${{ needs.audit.outputs.version }}
         run: |
           cargo zigbuild --release --locked --target ${{ matrix.target }}
 
@@ -179,7 +179,7 @@ jobs:
 
   release:
     name: Publish release (${{ matrix.config.lane }})
-    needs: [check-version, build]
+    needs: [audit, rust]
     strategy:
       fail-fast: false
       matrix:
@@ -189,7 +189,7 @@ jobs:
     permissions:
       contents: write
     env:
-      VERSION: ${{ needs.check-version.outputs.version }}
+      VERSION: ${{ needs.audit.outputs.version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -229,10 +229,10 @@ jobs:
               --generate-notes
           fi
 
-  homebrew:
+  docs:
     name: Update Homebrew (${{ matrix.config.lane }})
     if: needs.release.result == 'success'
-    needs: [check-version, release]
+    needs: [audit, release]
     strategy:
       fail-fast: false
       matrix:
@@ -257,7 +257,7 @@ jobs:
       - name: Update formula
         if: matrix.config.writer
         env:
-          VERSION: ${{ needs.check-version.outputs.version }}
+          VERSION: ${{ needs.audit.outputs.version }}
         run: |
           ARM64_LINUX_SHA256=$(awk '{print $1}' "artifacts/holla-${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256")
           X86_LINUX_SHA256=$(awk '{print $1}' "artifacts/holla-${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256")
@@ -293,7 +293,7 @@ jobs:
         if: matrix.config.writer
         working-directory: homebrew-tap
         env:
-          VERSION: ${{ needs.check-version.outputs.version }}
+          VERSION: ${{ needs.audit.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

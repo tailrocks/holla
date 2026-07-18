@@ -46,7 +46,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-deb:
+  rust:
     name: Build deb (${{ matrix.target }}, ${{ matrix.config.lane }})
     # Linux-only .deb builds for the holla-apt repository.
     # Uses the exact same jdx/mise-action + zigbuild pattern as jackin-project/jackin
@@ -142,9 +142,9 @@ jobs:
             holla-*.deb
             holla-*.deb.sha256
 
-  attach-and-deliver:
+  release:
     name: Attach and deliver (${{ matrix.config.lane }})
-    needs: build-deb
+    needs: rust
     strategy:
       fail-fast: false
       matrix:

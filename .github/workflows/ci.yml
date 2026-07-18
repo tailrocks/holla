@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
+  rust:
     name: Test (${{ matrix.config.lane }})
     strategy:
       fail-fast: false
@@ -67,7 +67,7 @@ jobs:
 
       - run: cargo build --color=always
 
-  fmt:
+  audit:
     name: Format (${{ matrix.config.lane }})
     strategy:
       fail-fast: false
@@ -89,7 +89,7 @@ jobs:
 
       - run: cargo fmt --all --check
 
-  clippy:
+  integration:
     name: Clippy (${{ matrix.config.lane }})
     strategy:
       fail-fast: false

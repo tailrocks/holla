@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  renovate:
+  release:
     name: Renovate (${{ matrix.config.lane }})
     strategy:
       fail-fast: false
