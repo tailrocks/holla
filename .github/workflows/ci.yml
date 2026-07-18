@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      lanes:
+        description: velnor (default) | github | both
+        type: choice
+        default: velnor
+        options: [velnor, github, both]
 
 permissions:
   contents: read
@@ -15,25 +21,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    runs-on: ubuntu-26.04
+  rust:
+    name: Test (${{ matrix.config.lane }})
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 20
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_CACHE_SIZE: 20G
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - id: sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-        continue-on-error: true
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-
-      - name: Enable sccache
-        if: steps.sccache.outcome == 'success'
-        run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        with:
+          version: v0.16.0
+          disable_annotations: "false"
 
       - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
@@ -52,28 +63,22 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      - name: Cache Cargo target
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target
-          key: cargo-target-${{ runner.os }}-${{ github.head_ref || github.ref_name }}-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-${{ github.head_ref || github.ref_name }}-test-
-            cargo-target-${{ runner.os }}-${{ github.base_ref || 'main' }}-test-
-            cargo-target-${{ runner.os }}-
-
       - run: cargo nextest run --all-features --color=always --no-tests=pass
 
       - run: cargo build --color=always
 
-      - name: sccache stats
-        if: always() && steps.sccache.outcome == 'success'
-        run: sccache --show-stats
-
-  fmt:
-    runs-on: ubuntu-26.04
+  audit:
+    name: Format (${{ matrix.config.lane }})
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
@@ -84,25 +89,30 @@ jobs:
 
       - run: cargo fmt --all --check
 
-  clippy:
-    runs-on: ubuntu-26.04
+  integration:
+    name: Clippy (${{ matrix.config.lane }})
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 20
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_CACHE_SIZE: 20G
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - id: sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-        continue-on-error: true
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-
-      - name: Enable sccache
-        if: steps.sccache.outcome == 'success'
-        run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        with:
+          version: v0.16.0
+          disable_annotations: "false"
 
       - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:

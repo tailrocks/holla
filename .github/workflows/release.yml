@@ -5,21 +5,35 @@ on:
     tags:
       - 'v[0-9]*'
   workflow_dispatch:
+    inputs:
+      lanes:
+        description: velnor (default) | github | both
+        type: choice
+        default: velnor
+        options: [velnor, github, both]
 
 permissions:
   contents: read
 
 concurrency:
-  group: release
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  check-version:
-    runs-on: ubuntu-26.04
+  audit:
+    name: Check version (${{ matrix.config.lane }})
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 45
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Require main for manual releases
         if: github.event_name == 'workflow_dispatch'
@@ -45,26 +59,31 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-  test:
-    needs: check-version
-    runs-on: ubuntu-26.04
+  integration:
+    name: Test release (${{ matrix.config.lane }})
+    needs: audit
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_CACHE_SIZE: 20G
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - id: sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-        continue-on-error: true
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-
-      - name: Enable sccache
-        if: steps.sccache.outcome == 'success'
-        run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        with:
+          version: v0.16.0
+          disable_annotations: "false"
 
       - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
@@ -85,44 +104,37 @@ jobs:
 
       - run: cargo nextest run --all-features --no-tests=pass
 
-  build:
-    needs: [check-version, test]
+  rust:
+    name: Build release (${{ matrix.target }}, ${{ matrix.config.lane }})
+    needs: [audit, integration]
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-26
-          - target: x86_64-apple-darwin
-            os: macos-26
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-26.04
-            zigbuild: true
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-26.04
-            zigbuild: true
-    runs-on: ${{ matrix.os }}
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 45
     env:
-      VERSION: ${{ needs.check-version.outputs.version }}
+      VERSION: ${{ needs.audit.outputs.version }}
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_CACHE_SIZE: 20G
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - id: sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-        continue-on-error: true
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-
-      - name: Enable sccache
-        if: steps.sccache.outcome == 'success'
-        run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        with:
+          version: v0.16.0
+          disable_annotations: "false"
 
       - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
-          install_args: "${{ matrix.zigbuild && 'rust zig cargo:cargo-zigbuild' || 'rust' }}"
+          install_args: "rust zig cargo:cargo-zigbuild"
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add Rust target
@@ -146,13 +158,9 @@ jobs:
 
       - name: Build
         env:
-          HOLLA_VERSION_OVERRIDE: ${{ needs.check-version.outputs.version }}
+          HOLLA_VERSION_OVERRIDE: ${{ needs.audit.outputs.version }}
         run: |
-          if [ "${{ matrix.zigbuild }}" = "true" ]; then
-            cargo zigbuild --release --locked --target ${{ matrix.target }}
-          else
-            cargo build --release --locked --target ${{ matrix.target }}
-          fi
+          cargo zigbuild --release --locked --target ${{ matrix.target }}
 
       - name: Package
         run: |
@@ -162,6 +170,7 @@ jobs:
           echo "archive=$archive" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: matrix.config.writer
         with:
           name: holla-${{ matrix.target }}
           path: |
@@ -169,22 +178,23 @@ jobs:
             holla-*.tar.gz.sha256
 
   release:
-    needs: [check-version, build]
-    runs-on: ubuntu-26.04
+    name: Publish release (${{ matrix.config.lane }})
+    needs: [audit, rust]
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 45
     permissions:
       contents: write
-    outputs:
-      arm64_macos: ${{ steps.shas.outputs.arm64_macos }}
-      x86_macos: ${{ steps.shas.outputs.x86_macos }}
-      arm64_linux: ${{ steps.shas.outputs.arm64_linux }}
-      x86_linux: ${{ steps.shas.outputs.x86_linux }}
     env:
-      VERSION: ${{ needs.check-version.outputs.version }}
+      VERSION: ${{ needs.audit.outputs.version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Create tag
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && matrix.config.writer
         run: |
           git tag "v${VERSION}"
           git push origin "v${VERSION}"
@@ -199,13 +209,12 @@ jobs:
         run: |
           read_sha() { awk '{print $1}' "artifacts/$1.sha256"; }
           {
-            echo "arm64_macos=$(read_sha "holla-${VERSION}-aarch64-apple-darwin.tar.gz")"
-            echo "x86_macos=$(read_sha "holla-${VERSION}-x86_64-apple-darwin.tar.gz")"
             echo "arm64_linux=$(read_sha "holla-${VERSION}-aarch64-unknown-linux-gnu.tar.gz")"
             echo "x86_linux=$(read_sha "holla-${VERSION}-x86_64-unknown-linux-gnu.tar.gz")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
+        if: matrix.config.writer
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -220,43 +229,44 @@ jobs:
               --generate-notes
           fi
 
-  homebrew:
+  docs:
+    name: Update Homebrew (${{ matrix.config.lane }})
     if: needs.release.result == 'success'
-    needs: [check-version, release]
-    runs-on: ubuntu-26.04
+    needs: [audit, release]
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: matrix.config.writer
         with:
           repository: tailrocks/homebrew-holla
           ref: main
           token: ${{ secrets.GH_HOLLA_HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: matrix.config.writer
+        with:
+          path: artifacts
+          merge-multiple: true
+
       - name: Update formula
+        if: matrix.config.writer
         env:
-          VERSION: ${{ needs.check-version.outputs.version }}
-          ARM64_MAC_SHA256: ${{ needs.release.outputs.arm64_macos }}
-          X86_MAC_SHA256: ${{ needs.release.outputs.x86_macos }}
-          ARM64_LINUX_SHA256: ${{ needs.release.outputs.arm64_linux }}
-          X86_LINUX_SHA256: ${{ needs.release.outputs.x86_linux }}
+          VERSION: ${{ needs.audit.outputs.version }}
         run: |
+          ARM64_LINUX_SHA256=$(awk '{print $1}' "artifacts/holla-${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256")
+          X86_LINUX_SHA256=$(awk '{print $1}' "artifacts/holla-${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256")
           cat > homebrew-tap/Formula/holla.rb <<EOF
           class Holla < Formula
             desc "Adaptive dev environment CLI — adapts to what you have installed"
             homepage "https://github.com/tailrocks/holla"
             version "${VERSION}"
             license "Apache-2.0"
-
-            on_macos do
-              on_arm do
-                url "https://github.com/tailrocks/holla/releases/download/v${VERSION}/holla-${VERSION}-aarch64-apple-darwin.tar.gz"
-                sha256 "${ARM64_MAC_SHA256}"
-              end
-              on_intel do
-                url "https://github.com/tailrocks/holla/releases/download/v${VERSION}/holla-${VERSION}-x86_64-apple-darwin.tar.gz"
-                sha256 "${X86_MAC_SHA256}"
-              end
-            end
 
             on_linux do
               on_arm do
@@ -280,9 +290,10 @@ jobs:
           EOF
 
       - name: Push formula update
+        if: matrix.config.writer
         working-directory: homebrew-tap
         env:
-          VERSION: ${{ needs.check-version.outputs.version }}
+          VERSION: ${{ needs.audit.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
