@@ -28,6 +28,11 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      lanes:
+        description: velnor (default) | github | both
+        type: choice
+        default: velnor
+        options: [velnor, github, both]
       tag:
         description: "Existing tag to (re)build the .deb(s) for (e.g. v0.2.0)."
         type: string
@@ -36,23 +41,30 @@ on:
 permissions:
   contents: write # create/upload the GitHub Release asset on the source repo
 
+concurrency:
+  group: release-deb-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-deb:
+    name: Build deb (${{ matrix.target }}, ${{ matrix.config.lane }})
     # Linux-only .deb builds for the holla-apt repository.
     # Uses the exact same jdx/mise-action + zigbuild pattern as jackin-project/jackin
     # (see their ci.yml / release.yml build-validator and build-jackin-capsule jobs).
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            zigbuild: true
-          - target: aarch64-unknown-linux-gnu
-            zigbuild: true
-    runs-on: ubuntu-26.04
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 45
     env:
       VERSION: ${{ github.event.inputs.tag && github.event.inputs.tag || github.ref_name }}
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_CACHE_SIZE: 20G
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -60,15 +72,9 @@ jobs:
 
       - id: sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-        continue-on-error: true
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-
-      - name: Enable sccache
-        if: steps.sccache.outcome == 'success'
-        run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        with:
+          version: v0.16.0
+          disable_annotations: "false"
 
       - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
@@ -98,13 +104,9 @@ jobs:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           export HOLLA_VERSION_OVERRIDE="${TAG#v}"
-          if [ "${{ matrix.zigbuild }}" = "true" ]; then
-            # Use modern glibc target (no .2.17) because we only target latest Debian
-            # for the .deb packages (see previous "latest and greatest Debian only" requirement).
-            cargo zigbuild --release --locked --target ${{ matrix.target }}
-          else
-            cargo build --release --locked --target ${{ matrix.target }}
-          fi
+          # Use modern glibc target (no .2.17) because we only target latest Debian
+          # for the .deb packages (see previous "latest and greatest Debian only" requirement).
+          cargo zigbuild --release --locked --target ${{ matrix.target }}
 
       - name: Build .deb (version pinned to the tag)
         env:
@@ -132,6 +134,7 @@ jobs:
           ls -l "$DEB_DST"*
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: matrix.config.writer
         with:
           name: holla-deb-${{ matrix.target }}
           path: |
@@ -139,8 +142,14 @@ jobs:
             holla-*.deb.sha256
 
   attach-and-deliver:
+    name: Attach and deliver (${{ matrix.config.lane }})
     needs: build-deb
-    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
+    runs-on: ${{ matrix.config.runner }}
+    timeout-minutes: 45
     permissions:
       contents: write
     env:
@@ -154,6 +163,7 @@ jobs:
           merge-multiple: true
 
       - name: Attach .deb(s) to the GitHub Release (source)
+        if: matrix.config.writer
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -164,6 +174,7 @@ jobs:
           gh release upload "$TAG" artifacts/holla-*-unknown-linux-gnu.deb artifacts/holla-*-unknown-linux-gnu.deb.sha256 --clobber
 
       - name: Push .deb(s) to holla-apt + trigger publish (optional)
+        if: matrix.config.writer
         # Same pattern as velnor: the source may be private (or we want consistent
         # delivery). holla-apt publishes from its *own* release. So we upload the
         # .deb(s) to a holla-apt release (same tag), then trigger its publish workflow.
