@@ -40,8 +40,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+
       - id: sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e # v0.0.10
         with:
           version: v0.16.0
           disable_annotations: "false"
@@ -59,9 +61,9 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/src
             ~/.cargo/git/db
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-registry-${{ matrix.config.lane }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-registry-${{ runner.os }}-
+            cargo-registry-${{ matrix.config.lane }}-${{ runner.os }}-
 
       - run: cargo nextest run --all-features --color=always --no-tests=pass
 
