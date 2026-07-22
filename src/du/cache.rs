@@ -441,10 +441,19 @@ mod tests {
         let root = fixture.path().join("root");
         let tree = fixture_tree(&root);
         let baseline = SizeBaseline::capture(&root);
-        std::thread::sleep(Duration::from_millis(2));
-        fs::write(root.join("changed-after-scan"), b"changed").unwrap();
-        let snapshot = snapshot(&root, &tree, SystemTime::now(), &baseline);
+        let before = modified_nanos(&root).expect("root mtime");
 
+        // Advance wall clock past 1s mtime granularity used by some filesystems.
+        std::thread::sleep(Duration::from_millis(1100));
+        fs::write(root.join("changed-after-scan"), b"changed").unwrap();
+
+        let after = modified_nanos(&root).expect("root mtime after write");
+        assert_ne!(
+            before, after,
+            "filesystem did not advance directory mtime after create"
+        );
+
+        let snapshot = snapshot(&root, &tree, SystemTime::now(), &baseline);
         assert!(!snapshot.entries.iter().any(|(path, _)| path == &root));
     }
 }
