@@ -24,7 +24,7 @@ termrock = { git = "https://github.com/tailrocks/termrock.git", rev = "56b856be6
 anyhow = "=1.0.104"
 thiserror = "=2.0.18"
 which = "=8.0.5"
-tokio-stream = "=0.1.18"
+tokio-stream = "=0.1.19"
 futures = "=0.3.32"
 libc = "=0.2.186"
 nucleo-matcher = "=0.3.1"
