@@ -1,6 +1,6 @@
 [tools]
 "cargo:cargo-deb" = "3.7.0"
-"cargo:cargo-nextest" = "0.9.140"
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.140"
 "cargo:cargo-zigbuild" = "0.23.0"
 zig = "0.16.0"
 
