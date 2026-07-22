@@ -8,13 +8,19 @@ Every executable workflow uses one canonical YAML shape on all lanes:
   `ubuntu-26.04`; never use `ubuntu-latest` or an unpinned Ubuntu label.
 - `both` executes identical jobs and steps on both lanes.
 
+The canonical Sunday parity schedule selects `both`. Other automatic events
+remain Velnor-default.
+
 Use the `lanes` choice input and canonical inline `matrix.config` expression.
 Only `matrix.config.writer` may gate mutating steps; it must guarantee exactly
 one writer. Never branch step semantics by lane.
 
 Rust compile jobs use mold and local-only sccache v0.16.0 with a 20 GiB bound.
-The native adapter owns cache reporting. Do not combine target-directory
-caches with sccache, compile CI tooling, or enable a remote cache backend.
+The native adapter owns cache reporting. Persist compatible commit generations
+of the Cargo target through `actions/cache`; main seeds PR restores and PR
+caches remain merge-ref scoped. Do not compile CI tooling or enable a remote
+compiler-cache backend. Keep cache state workspace-owned; never repair
+permissions with `sudo`.
 
 Every job has a measured `timeout-minutes`; every workflow has concurrency and
 an intentional cancellation policy. Checkouts are shallow and disable
