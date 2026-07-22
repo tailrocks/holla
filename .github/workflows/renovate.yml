@@ -36,7 +36,7 @@ jobs:
       - name: Cache Renovate data
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /tmp/renovate/cache
+          path: .renovate/cache
           key: renovate-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
             renovate-${{ runner.os }}-
@@ -47,8 +47,8 @@ jobs:
         # mounted into the container. Make that shared boundary writable
         # without coupling the workflow to either side's numeric UID.
         run: |
-          sudo install -d -m 0777 /tmp/renovate /tmp/renovate/cache /tmp/renovate/repos
-          sudo chmod -R a+rwX /tmp/renovate
+          install -d -m 0777 .renovate .renovate/cache .renovate/repos
+          chmod -R a+rwX .renovate
 
       - name: Self-hosted Renovate
         if: matrix.config.writer
@@ -61,6 +61,7 @@ jobs:
           RENOVATE_REPOSITORIES: ${{ github.repository }}
           RENOVATE_ONBOARDING: false
           RENOVATE_REPOSITORY_CACHE: enabled
+          RENOVATE_BASE_DIR: /github/workspace/.renovate
           # Pin the git author identity so the DCO sign-off trailer in
           # renovate.json::commitBody always matches the commit-author
           # email. DCO-2 requires the Signed-off-by email to equal the
