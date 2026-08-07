@@ -16,7 +16,7 @@ name = "holla"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "=4.6.4", features = ["derive", "color", "help", "usage"] }
+clap = { version = "=4.6.5", features = ["derive", "color", "help", "usage"] }
 tokio = { version = "=1.53.1", features = ["full"] }
 ratatui = "=0.30.2"
 crossterm = { version = "=0.29.0", features = ["event-stream"] }
@@ -30,7 +30,7 @@ libc = "=0.2.189"
 nucleo-matcher = "=0.3.1"
 unicode-segmentation = "=1.13.3"
 jwalk = "=0.8.1"
-fff-search = { git = "https://github.com/dmtrKovalenko/fff.git", rev = "fde8c52a298a2fa4375edf626e0c37b0400f5a8b" }
+fff-search = { git = "https://github.com/dmtrKovalenko/fff.git", rev = "3a0ce85c54875563bc55888b6b9829b44aeca911" }
 rayon = "=1.12.0"
 dashmap = "=6.2.1"
 dirs = "=6.0.0"
@@ -39,7 +39,7 @@ humantime = "=2.4.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 trash = "=5.2.6"
-toml = "=1.1.3"
+toml = "=1.1.4"
 sha2 = "=0.11.0"
 
 [dev-dependencies]
