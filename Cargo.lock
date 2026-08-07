@@ -774,7 +774,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 [[package]]
 name = "fff-grep"
 version = "0.10.1"
-source = "git+https://github.com/dmtrKovalenko/fff.git?rev=fde8c52a298a2fa4375edf626e0c37b0400f5a8b#fde8c52a298a2fa4375edf626e0c37b0400f5a8b"
+source = "git+https://github.com/dmtrKovalenko/fff.git?rev=3a0ce85c54875563bc55888b6b9829b44aeca911#3a0ce85c54875563bc55888b6b9829b44aeca911"
 dependencies = [
  "bstr",
  "memchr",
@@ -797,12 +797,12 @@ dependencies = [
 [[package]]
 name = "fff-query-parser"
 version = "0.10.1"
-source = "git+https://github.com/dmtrKovalenko/fff.git?rev=fde8c52a298a2fa4375edf626e0c37b0400f5a8b#fde8c52a298a2fa4375edf626e0c37b0400f5a8b"
+source = "git+https://github.com/dmtrKovalenko/fff.git?rev=3a0ce85c54875563bc55888b6b9829b44aeca911#3a0ce85c54875563bc55888b6b9829b44aeca911"
 
 [[package]]
 name = "fff-search"
 version = "0.10.1"
-source = "git+https://github.com/dmtrKovalenko/fff.git?rev=fde8c52a298a2fa4375edf626e0c37b0400f5a8b#fde8c52a298a2fa4375edf626e0c37b0400f5a8b"
+source = "git+https://github.com/dmtrKovalenko/fff.git?rev=3a0ce85c54875563bc55888b6b9829b44aeca911#3a0ce85c54875563bc55888b6b9829b44aeca911"
 dependencies = [
  "ahash",
  "aho-corasick",
@@ -1038,15 +1038,14 @@ dependencies = [
 
 [[package]]
 name = "git2"
-version = "0.20.4"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b88256088d75a56f8ecfa070513a775dd9107f6530ef14919dac831af9cfe2b"
+checksum = "ddddbf932745a6be37109b6112d3ee09696106f848449069d3a57bba937ab82e"
 dependencies = [
  "bitflags 2.13.1",
  "libc",
  "libgit2-sys",
  "log",
- "url",
 ]
 
 [[package]]
