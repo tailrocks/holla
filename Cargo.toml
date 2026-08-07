@@ -29,7 +29,7 @@ futures = "=0.3.33"
 libc = "=0.2.189"
 nucleo-matcher = "=0.3.1"
 unicode-segmentation = "=1.13.3"
-jwalk = "=0.8.1"
+jwalk = "=0.9.0"
 fff-search = { git = "https://github.com/dmtrKovalenko/fff.git", rev = "3a0ce85c54875563bc55888b6b9829b44aeca911" }
 rayon = "=1.12.0"
 dashmap = "=6.2.1"
