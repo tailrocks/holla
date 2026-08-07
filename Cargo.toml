@@ -16,7 +16,7 @@ name = "holla"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "=4.6.5", features = ["derive", "color", "help", "usage"] }
+clap = { version = "=4.6.6", features = ["derive", "color", "help", "usage"] }
 tokio = { version = "=1.53.1", features = ["full"] }
 ratatui = "=0.30.2"
 crossterm = { version = "=0.29.0", features = ["event-stream"] }
