@@ -130,7 +130,10 @@ pub(crate) fn run(
                 if let Some(raw) = entry.client_state.raw.as_ref() {
                     debug_assert_eq!(raw.name, entry.file_name());
                 }
-                if let Some(error) = entry.read_children_error.as_ref()
+                if let Some(error) = entry
+                    .read_children
+                    .as_ref()
+                    .and_then(jwalk::ReadChildren::error)
                     && let Some(id) = entry.client_state.node_id
                 {
                     record_directory_error(
@@ -263,7 +266,7 @@ fn process_entries(
                         raw.file_type.is_dir(),
                     );
                     if raw.file_type.is_dir() {
-                        entry.read_children_path = None;
+                        entry.read_children = None;
                     }
                 }
                 entry.client_state.raw = Some(raw);
@@ -287,7 +290,7 @@ fn process_entries(
                 );
                 entry.client_state.metadata_error = Some(kind);
                 if entry.file_type().is_dir() {
-                    entry.read_children_path = None;
+                    entry.read_children = None;
                 }
             }
         }
