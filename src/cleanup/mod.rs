@@ -2,11 +2,14 @@ use serde::Serialize;
 use std::{
     collections::HashSet,
     fs::{self, OpenOptions},
-    io::{self, Write},
+    io::Write,
     os::unix::ffi::OsStrExt,
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(not(target_os = "macos"))]
+use std::io;
 
 // Threat model: holla runs unprivileged for one interactive user. Platform
 // Trash and std filesystem APIs accept pathnames, so they cannot atomically
