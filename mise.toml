@@ -6,3 +6,4 @@ zig = "0.16.0"
 
 [settings]
 idiomatic_version_file_enable_tools = ["rust"]
+lockfile = true
