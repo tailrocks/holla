@@ -136,7 +136,7 @@ jobs:
           key: cargo-target-${{ matrix.config.lane }}-${{ runner.os }}-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/config.toml', '**/Cargo.toml', '**/Cargo.lock') }}-${{ github.sha }}
           restore-keys: cargo-target-${{ matrix.config.lane }}-${{ runner.os }}-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/config.toml', '**/Cargo.toml', '**/Cargo.lock') }}-
 
-      - run: cargo nextest run --all-features --no-tests=pass
+      - run: mise exec aqua:nextest-rs/nextest/cargo-nextest@0.9.140 -- cargo nextest run --all-features --no-tests=pass
 
   rust:
     name: Build release (${{ matrix.target }}, ${{ matrix.config.lane }})
@@ -202,7 +202,7 @@ jobs:
         env:
           HOLLA_VERSION_OVERRIDE: ${{ needs.audit.outputs.version }}
         run: |
-          cargo zigbuild --release --locked --target ${{ matrix.target }}
+          mise exec cargo:cargo-zigbuild@0.23.0 -- cargo zigbuild --release --locked --target ${{ matrix.target }}
 
       - name: Package
         run: |
