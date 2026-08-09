@@ -400,15 +400,25 @@ jobs:
           end
           EOF
 
-      - name: Push formula update
+      - name: Open and merge PR for tap update
         if: matrix.config.writer
         working-directory: homebrew-tap
         env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ needs.audit.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/holla.rb
           git diff --cached --quiet --exit-code && echo "Formula already up to date" && exit 0
+          branch="stable/formula-${VERSION}"
+          git switch -c "$branch"
           git commit -m "holla ${VERSION}"
-          git push
+          git push -u origin "$branch"
+          pr_url=$(gh pr create \
+            --title "holla ${VERSION}" \
+            --body "Update stable Homebrew formula for holla ${VERSION}." \
+            --base main \
+            --head "$branch")
+          echo "Opened PR: $pr_url"
+          gh pr merge "$pr_url" --squash --delete-branch
