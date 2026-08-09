@@ -11,6 +11,10 @@ on:
         type: choice
         default: velnor
         options: [velnor, github, both]
+      release_ref:
+        description: Existing release tag to rebuild (for example v1.0.0)
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -30,26 +34,43 @@ jobs:
     timeout-minutes: 45
     outputs:
       version: ${{ steps.version.outputs.version }}
+      ref: ${{ steps.release-ref.outputs.ref }}
     steps:
+      - name: Resolve release ref
+        id: release-ref
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: |
+          set -euo pipefail
+          ref="$GITHUB_REF"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "$GITHUB_REF" = "refs/heads/main" || {
+              echo "::error::workflow_dispatch releases must run from main"
+              exit 1
+            }
+            if [ -n "$RELEASE_REF" ]; then
+              case "$RELEASE_REF" in
+                v[0-9]*) ref="refs/tags/$RELEASE_REF" ;;
+                refs/tags/v[0-9]*) ref="$RELEASE_REF" ;;
+                *) echo "::error::release_ref must be a v-prefixed tag"; exit 1 ;;
+              esac
+            fi
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ steps.release-ref.outputs.ref }}
           persist-credentials: false
-
-      - name: Require main for manual releases
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          test "${GITHUB_REF}" = "refs/heads/main" || {
-            echo "::error::workflow_dispatch releases must run from main"
-            exit 1
-          }
 
       - name: Determine version
         id: version
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/v}"
+          release_ref="${{ steps.release-ref.outputs.ref }}"
+          if [[ "$release_ref" == refs/tags/v* ]]; then
+            version="${release_ref#refs/tags/v}"
           else
             version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
             if [[ "$version" == *"-dev"* ]]; then
@@ -57,6 +78,11 @@ jobs:
               exit 1
             fi
           fi
+          manifest_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "$manifest_version" = "$version" || {
+            echo "::error::tag version $version does not match Cargo.toml version $manifest_version"
+            exit 1
+          }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   integration:
@@ -77,6 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.audit.outputs.ref }}
           persist-credentials: false
 
       - id: sccache
@@ -131,6 +158,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.audit.outputs.ref }}
           persist-credentials: false
 
       - id: sccache
@@ -191,9 +219,61 @@ jobs:
             holla-*.tar.gz
             holla-*.tar.gz.sha256
 
+  macos:
+    name: Build release (${{ matrix.target }}, GitHub)
+    needs: [audit, integration]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.audit.outputs.version }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.audit.outputs.ref }}
+          persist-credentials: false
+
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+          disable_annotations: "false"
+
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          install_args: rust
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        env:
+          HOLLA_VERSION_OVERRIDE: ${{ needs.audit.outputs.version }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          archive="holla-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C "target/${{ matrix.target }}/release" holla
+          shasum -a 256 "$archive" > "$archive.sha256"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: holla-${{ matrix.target }}
+          path: |
+            holla-*.tar.gz
+            holla-*.tar.gz.sha256
+
   release:
     name: Publish release (${{ matrix.config.lane }})
-    needs: [audit, rust]
+    needs: [audit, rust, macos]
     strategy:
       fail-fast: false
       matrix:
@@ -206,9 +286,11 @@ jobs:
       VERSION: ${{ needs.audit.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.audit.outputs.ref }}
 
       - name: Create tag
-        if: github.event_name == 'workflow_dispatch' && matrix.config.writer
+        if: github.event_name == 'workflow_dispatch' && inputs.release_ref == '' && matrix.config.writer
         run: |
           git tag "v${VERSION}"
           git push origin "v${VERSION}"
@@ -225,6 +307,8 @@ jobs:
           {
             echo "arm64_linux=$(read_sha "holla-${VERSION}-aarch64-unknown-linux-gnu.tar.gz")"
             echo "x86_linux=$(read_sha "holla-${VERSION}-x86_64-unknown-linux-gnu.tar.gz")"
+            echo "arm64_macos=$(read_sha "holla-${VERSION}-aarch64-apple-darwin.tar.gz")"
+            echo "x86_macos=$(read_sha "holla-${VERSION}-x86_64-apple-darwin.tar.gz")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
@@ -275,12 +359,25 @@ jobs:
         run: |
           ARM64_LINUX_SHA256=$(awk '{print $1}' "artifacts/holla-${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256")
           X86_LINUX_SHA256=$(awk '{print $1}' "artifacts/holla-${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256")
+          ARM64_MACOS_SHA256=$(awk '{print $1}' "artifacts/holla-${VERSION}-aarch64-apple-darwin.tar.gz.sha256")
+          X86_MACOS_SHA256=$(awk '{print $1}' "artifacts/holla-${VERSION}-x86_64-apple-darwin.tar.gz.sha256")
           cat > homebrew-tap/Formula/holla.rb <<EOF
           class Holla < Formula
             desc "Adaptive dev environment CLI — adapts to what you have installed"
             homepage "https://github.com/tailrocks/holla"
             version "${VERSION}"
             license "Apache-2.0"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/tailrocks/holla/releases/download/v${VERSION}/holla-${VERSION}-aarch64-apple-darwin.tar.gz"
+                sha256 "${ARM64_MACOS_SHA256}"
+              end
+              on_intel do
+                url "https://github.com/tailrocks/holla/releases/download/v${VERSION}/holla-${VERSION}-x86_64-apple-darwin.tar.gz"
+                sha256 "${X86_MACOS_SHA256}"
+              end
+            end
 
             on_linux do
               on_arm do
