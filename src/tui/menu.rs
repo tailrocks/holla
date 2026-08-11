@@ -11,7 +11,7 @@ use termrock::{
     keymap::{KeyBinding, KeyChord, Keymap, Visibility},
     layout::centered_rect,
     scroll::{DialogScroll, max_line_width},
-    style::{Role, Theme},
+    style::{Density, DesignTokens, Role, Theme},
     widgets::{
         Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, List, ListRow,
         ListState, Panel, PanelEmphasis, RowRole, Severity, StatusBar, StatusBarState, StatusSlot,
@@ -207,9 +207,14 @@ fn menu_rows_with_history(
             rows.push(ListRow {
                 id: ActionId::Separator("recent".to_owned()),
                 label: Line::styled("Recent", theme.style(Role::TextMuted)),
+                leading: None,
+                secondary: None,
+                badge: None,
+                shortcut: None,
                 trailing: None,
                 role: RowRole::Separator,
                 enabled: false,
+                loading: false,
             });
             rows.extend(recent.into_iter().map(|(action, _, _, _)| ListRow {
                 id: ActionId::Action {
@@ -217,9 +222,14 @@ fn menu_rows_with_history(
                     recent: true,
                 },
                 label: Line::raw(action.label.clone()),
+                leading: None,
+                secondary: None,
+                badge: None,
+                shortcut: None,
                 trailing: None,
                 role: RowRole::Item,
                 enabled: true,
+                loading: false,
             }));
         }
         let mut previous_group = None;
@@ -228,9 +238,14 @@ fn menu_rows_with_history(
                 rows.push(ListRow {
                     id: ActionId::Separator(group.id.to_owned()),
                     label: Line::styled(group.title.clone(), theme.style(Role::TextMuted)),
+                    leading: None,
+                    secondary: None,
+                    badge: None,
+                    shortcut: None,
                     trailing: None,
                     role: RowRole::Separator,
                     enabled: false,
+                    loading: false,
                 });
                 previous_group = Some(group.id.as_str());
             }
@@ -240,9 +255,14 @@ fn menu_rows_with_history(
                     recent: false,
                 },
                 label: Line::raw(action.label.clone()),
+                leading: None,
+                secondary: None,
+                badge: None,
+                shortcut: None,
                 trailing: None,
                 role: RowRole::Item,
                 enabled: true,
+                loading: false,
             }));
         }
         return rows;
@@ -259,9 +279,14 @@ fn menu_rows_with_history(
                     recent: false,
                 },
                 label: highlighted_hit(group, &hit, theme),
+                leading: None,
+                secondary: None,
+                badge: None,
+                shortcut: None,
                 trailing: None,
                 role: RowRole::Item,
                 enabled: true,
+                loading: false,
             }
         })
         .collect()
@@ -376,6 +401,7 @@ fn needs_confirmation(action: &ActionSpec) -> bool {
 
 pub async fn run() -> anyhow::Result<()> {
     let theme = Theme::tailrocks_phosphor();
+    let tokens = DesignTokens::new(theme.clone(), Density::default());
     let mut menu = Menu::default();
     let mut scans: Option<mpsc::Receiver<ScanEvent>> = None;
     let mut scanning = true;
@@ -518,7 +544,7 @@ pub async fn run() -> anyhow::Result<()> {
                 &mut search_state,
             );
 
-            let list_panel = Panel::new(&theme)
+            let list_panel = Panel::new(&tokens)
                 .title(" holla ")
                 .emphasis(if preview_focused {
                     PanelEmphasis::Normal
@@ -527,7 +553,7 @@ pub async fn run() -> anyhow::Result<()> {
                 });
             let list_inner = list_panel.inner(list_area);
             frame.render_widget(&list_panel, list_area);
-            frame.render_stateful_widget(&List::new(&rows, &theme), list_inner, &mut list_state);
+            frame.render_stateful_widget(&List::new(&rows, &tokens), list_inner, &mut list_state);
 
             preview_viewport = (
                 usize::from(preview_area.height.saturating_sub(2)),

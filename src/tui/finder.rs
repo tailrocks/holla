@@ -16,7 +16,7 @@ use termrock::{
     keymap::{KeyBinding, KeyChord, Keymap, Visibility},
     layout::centered_rect,
     osc::{ClipboardSelection, ClipboardWrite, encode_clipboard},
-    style::{Role, Theme},
+    style::{Density, DesignTokens, Role, Theme},
     widgets::{
         Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, List, ListRow,
         ListState, Panel, PanelEmphasis, RowRole, TextInput, TextInputOutcome, TextInputState,
@@ -81,6 +81,7 @@ pub async fn run() -> anyhow::Result<()> {
     let home = dirs::home_dir().context("home directory is unavailable")?;
     let index = FileIndex::build(vec![home.clone()]);
     let theme = Theme::tailrocks_phosphor();
+    let tokens = DesignTokens::new(theme.clone(), Density::default());
     let mut input = TextInputState::new("").with_allow_empty(true);
     let mut list_state = ListState::<PathBuf>::new(None);
     let mut pending: Option<PendingAction> = None;
@@ -116,12 +117,12 @@ pub async fn run() -> anyhow::Result<()> {
                 search_area,
                 &mut input,
             );
-            let panel = Panel::new(&theme)
+            let panel = Panel::new(&tokens)
                 .title(" Files and folders ")
                 .emphasis(PanelEmphasis::Focused);
             let inner = panel.inner(list_area);
             frame.render_widget(&panel, list_area);
-            frame.render_stateful_widget(&List::new(&rows, &theme), inner, &mut list_state);
+            frame.render_stateful_widget(&List::new(&rows, &tokens), inner, &mut list_state);
             let status = if index.is_complete() {
                 format!(
                     "{} indexed · {} results · {}",
@@ -353,9 +354,14 @@ fn result_rows(hits: &[FileHit], theme: &Theme) -> Vec<ListRow<'static, PathBuf>
             ListRow {
                 id: hit.path.clone(),
                 label,
+                leading: None,
+                secondary: None,
+                badge: None,
+                shortcut: None,
                 trailing: None,
                 role: RowRole::Item,
                 enabled: true,
+                loading: false,
             }
         })
         .collect()
