@@ -11,7 +11,7 @@ use ratatui::{
 use termrock::{
     input::KeyCode,
     interaction::Outcome,
-    style::{Role, Theme},
+    style::{Density, DesignTokens, Role, Theme},
     widgets::{
         Hint, HintBar, List, ListRow, ListState, Panel, PanelEmphasis, Progress, ProgressKind,
         RowRole, StatusBar, StatusBarState, StatusSlot,
@@ -100,6 +100,7 @@ pub async fn run(filter: Option<&'static str>) -> anyhow::Result<()> {
     fill_sizers(&views, &mut active, &mut next_sizer);
 
     let theme = Theme::tailrocks_phosphor();
+    let tokens = DesignTokens::new(theme.clone(), Density::default());
     let mut overview_state = ListState::new(views.first().map(|view| view.spec.id));
     overview_state.enable_multi_select();
     let mut detail_state = ListState::<PathBuf>::new(None);
@@ -217,7 +218,7 @@ pub async fn run(filter: Option<&'static str>) -> anyhow::Result<()> {
                     progress_area,
                 );
             }
-            let panel = Panel::new(&theme)
+            let panel = Panel::new(&tokens)
                 .title(if detail.is_some() {
                     " Candidates "
                 } else {
@@ -228,13 +229,13 @@ pub async fn run(filter: Option<&'static str>) -> anyhow::Result<()> {
             frame.render_widget(&panel, list_area);
             if detail.is_some() {
                 frame.render_stateful_widget(
-                    &List::new(&detail_rows, &theme),
+                    &List::new(&detail_rows, &tokens),
                     inner,
                     &mut detail_state,
                 );
             } else {
                 frame.render_stateful_widget(
-                    &List::new(&overview_rows, &theme),
+                    &List::new(&overview_rows, &tokens),
                     inner,
                     &mut overview_state,
                 );
@@ -385,6 +386,10 @@ fn overview_rows(
                     Span::raw(format!("{}  ", view.spec.title)),
                     Span::styled(badge, theme.style(role)),
                 ]),
+                leading: None,
+                secondary: None,
+                badge: None,
+                shortcut: None,
                 trailing: Some(Line::styled(
                     if !view.finished && sizing {
                         format!("{} · sizing…", format_size(total, DECIMAL))
@@ -395,6 +400,7 @@ fn overview_rows(
                 )),
                 role: RowRole::Item,
                 enabled: true,
+                loading: false,
             }
         })
         .collect()
@@ -423,12 +429,17 @@ fn candidate_rows(view: &InsightView, theme: &Theme) -> Vec<ListRow<'static, Pat
                         Role::TextMuted
                     }),
                 ),
+                leading: None,
+                secondary: None,
+                badge: None,
+                shortcut: None,
                 trailing: Some(Line::styled(
                     format_size(candidate.size, DECIMAL),
                     theme.style(Role::TextMuted),
                 )),
                 role: RowRole::Item,
                 enabled: candidate.eligible,
+                loading: false,
             }
         })
         .collect()

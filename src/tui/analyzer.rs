@@ -29,7 +29,7 @@ use std::{
 use termrock::{
     input::KeyCode,
     layout::centered_rect,
-    style::{Role, Theme},
+    style::{Density, DesignTokens, Role, Theme},
     widgets::{
         Backdrop, Hint, HintBar, List, ListRow, ListState, Panel, PanelEmphasis, Progress,
         ProgressKind, RowRole, StatusBar, StatusBarState, StatusSlot, TextInput, TextInputOutcome,
@@ -276,6 +276,10 @@ impl CachedProjection {
                         .into_owned(),
                     theme.style(Role::TextMuted),
                 ),
+                leading: None,
+                secondary: None,
+                badge: None,
+                shortcut: None,
                 trailing: Some(Line::styled(
                     format!(
                         "{} · cached {} ago",
@@ -324,6 +328,7 @@ impl CachedProjection {
 pub async fn overview() -> anyhow::Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("home directory is unavailable"))?;
     let theme = Theme::tailrocks_phosphor();
+    let tokens = DesignTokens::new(theme.clone(), Density::default());
     let items = overview_items(&home, &SizeCache::load(), SystemTime::now());
     let rows = overview_rows(&items, SystemTime::now(), &theme);
     let mut state = ListState::new(rows.first().map(|row| row.id));
@@ -347,7 +352,7 @@ pub async fn overview() -> anyhow::Result<()> {
                 Paragraph::new("Disk overview").style(theme.style(Role::Accent)),
                 header_area,
             );
-            let panel = Panel::new(&theme)
+            let panel = Panel::new(&tokens)
                 .title(" Places to inspect ")
                 .emphasis(PanelEmphasis::Focused);
             let inner = panel.inner(list_area);
@@ -358,7 +363,7 @@ pub async fn overview() -> anyhow::Result<()> {
                     inner,
                 );
             } else {
-                frame.render_stateful_widget(&List::new(&rows, &theme), inner, &mut state);
+                frame.render_stateful_widget(&List::new(&rows, &tokens), inner, &mut state);
             }
             frame.render_widget(
                 Paragraph::new("Cached sizes are labeled; selecting any row starts a live scan")
@@ -481,9 +486,14 @@ fn overview_rows(
                         Role::Text
                     }),
                 ),
+                leading: None,
+                secondary: None,
+                badge: None,
+                shortcut: None,
                 trailing: Some(Line::styled(trailing, theme.style(Role::TextMuted))),
                 role: RowRole::Item,
                 enabled: true,
+                loading: false,
             }
         })
         .collect()
@@ -642,6 +652,10 @@ fn merged_projection(
         rows.push(TreeNode {
             id: path.clone(),
             label,
+            leading: None,
+            secondary: None,
+            badge: None,
+            shortcut: None,
             trailing: Some(trailing),
             depth,
             branch,
@@ -758,6 +772,7 @@ fn capture_baseline(root: &Path) -> BaselineTask {
 
 async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Result<()> {
     let theme = Theme::tailrocks_phosphor();
+    let tokens = DesignTokens::new(theme.clone(), Density::default());
     let now = SystemTime::now();
     let cached = CachedProjection::new(&root, SizeCache::load().valid_below(&root, now));
     let mut cache_active = !cached.is_empty();
@@ -1058,7 +1073,7 @@ async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Res
                     progress_area,
                 );
             }
-            let panel = Panel::new(&theme)
+            let panel = Panel::new(&tokens)
                 .title(if view == AnalyzerView::TopFiles {
                     " Top files "
                 } else {
@@ -1068,12 +1083,12 @@ async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Res
             let inner = panel.inner(tree_area);
             frame.render_widget(&panel, tree_area);
             if view == AnalyzerView::Tree {
-                frame.render_stateful_widget(&Tree::new(&rows, &theme), inner, &mut tree_state);
+                frame.render_stateful_widget(&Tree::new(&rows, &tokens), inner, &mut tree_state);
             } else {
                 match top_files.as_ref() {
                     Some(TopFiles::Available(files)) if !files.is_empty() => {
                         frame.render_stateful_widget(
-                            &List::new(&top_rows, &theme),
+                            &List::new(&top_rows, &tokens),
                             inner,
                             &mut top_state,
                         );
@@ -1220,6 +1235,7 @@ async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Res
 
 pub async fn prompt_path() -> anyhow::Result<Option<PathBuf>> {
     let theme = Theme::tailrocks_phosphor();
+    let tokens = DesignTokens::new(theme.clone(), Density::default());
     let initial = std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
@@ -1236,7 +1252,7 @@ pub async fn prompt_path() -> anyhow::Result<Option<PathBuf>> {
         terminal.draw(|frame| {
             frame.render_widget(Backdrop::default(), frame.area());
             let area = centered_rect(76, 7, frame.area());
-            let panel = Panel::new(&theme)
+            let panel = Panel::new(&tokens)
                 .title(" Analyze a path ")
                 .emphasis(PanelEmphasis::Focused);
             let inner = panel.inner(area);
@@ -1392,9 +1408,14 @@ fn top_file_rows(files: Option<&TopFiles>) -> Vec<ListRow<'static, usize>> {
         .map(|(id, file)| ListRow {
             id,
             label: Line::from(file.path.display().to_string()),
+            leading: None,
+            secondary: None,
+            badge: None,
+            shortcut: None,
             trailing: Some(Line::from(format_size(file.on_disk, DECIMAL))),
             role: RowRole::Item,
             enabled: true,
+            loading: false,
         })
         .collect()
 }
@@ -1479,6 +1500,10 @@ fn project_tree(
         rows.push(TreeNode {
             id,
             label: Line::from(label),
+            leading: None,
+            secondary: None,
+            badge: None,
+            shortcut: None,
             trailing: Some(Line::from(trailing)),
             depth,
             branch,
