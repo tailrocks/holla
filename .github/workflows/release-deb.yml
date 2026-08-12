@@ -145,19 +145,17 @@ jobs:
             holla-*.deb
             holla-*.deb.sha256
 
-  release:
-    name: Attach and deliver (${{ matrix.config.lane }})
+  package-record:
     needs: rust
-    strategy:
-      fail-fast: false
-      matrix:
-        config: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') && '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true},{"lane":"GitHub","runner":"ubuntu-26.04","writer":false}]' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') && '[{"lane":"GitHub","runner":"ubuntu-26.04","writer":true}]' || '[{"lane":"Velnor","runner":["self-hosted","velnor-target-mvp"],"writer":true}]') }}
-    runs-on: ${{ matrix.config.runner }}
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      source-ref: ${{ steps.identity.outputs.source-ref }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -168,13 +166,136 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Attach .deb(s) to the GitHub Release (source)
-        if: matrix.config.writer
+      - id: identity
+        name: Bind complete source release and assemble package record
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Create the release if it does not exist yet (the main release.yml may have created it with tarballs), then upload the deb assets.
-          gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --title "$TAG" --generate-notes
-          gh release upload "$TAG" artifacts/holla-*-unknown-linux-gnu.deb artifacts/holla-*-unknown-linux-gnu.deb.sha256 --clobber
+          [[ "$TAG" =~ ^v[0-9]+[.][0-9]+[.][0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          version=${TAG#v}
+          {
+            echo "version=$version"
+            echo "source-ref=refs/tags/$TAG"
+          } >> "$GITHUB_OUTPUT"
+          for attempt in {1..30}; do
+            if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern 'holla-*.tar.gz' --pattern 'holla-*.tar.gz.sha256' \
+              --dir artifacts/source-release 2>/dev/null; then break; fi
+            test "$attempt" -lt 30
+            sleep 10
+          done
+          subjects=(artifacts/source-release/holla-*.tar.gz artifacts/holla-*.deb)
+          test "${#subjects[@]}" -eq 6
+          : > SHA256SUMS
+          : > assets.jsonl
+          mkdir signer-input
+          for subject in "${subjects[@]}"; do
+            name=$(basename "$subject")
+            digest=$(sha256sum "$subject" | awk '{print $1}')
+            test "$(cat "${subject}.sha256")" = "$digest"
+            printf '%s  %s\n' "$digest" "$name" >> SHA256SUMS
+            jq -cn --arg name "$name" --arg sha256 "$digest" '{name:$name,sha256:$sha256}' >> assets.jsonl
+            cp "$subject" signer-input/
+          done
+          source_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+          test "$source_commit" = "$GITHUB_SHA"
+          jq -S -n --arg source_repository "$GITHUB_REPOSITORY" \
+            --arg source_ref "refs/tags/$TAG" --arg source_commit "$source_commit" \
+            --arg version "$version" --slurpfile assets assets.jsonl \
+            '{schema:"velnor.package-release.v1",source_repository:$source_repository,source_ref:$source_ref,source_commit:$source_commit,version:$version,assets:$assets}' \
+            > release-manifest.json
+          sha256sum --check --strict SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-subjects
+          path: signer-input
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-release-metadata
+          path: |
+            release-manifest.json
+            SHA256SUMS
+          if-no-files-found: error
+
+  sign-arm64-macos:
+    needs: package-record
+    permissions: {attestations: write, contents: read, id-token: write}
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@643c5341b160be151a7fae19b89b6a4f8ab3b275 # 2026.8.6
+    with:
+      artifact-name: package-subjects
+      subject-path: holla-${{ needs.package-record.outputs.version }}-aarch64-apple-darwin.tar.gz
+      source-ref: ${{ needs.package-record.outputs.source-ref }}
+
+  sign-x86-macos:
+    needs: package-record
+    permissions: {attestations: write, contents: read, id-token: write}
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@643c5341b160be151a7fae19b89b6a4f8ab3b275 # 2026.8.6
+    with:
+      artifact-name: package-subjects
+      subject-path: holla-${{ needs.package-record.outputs.version }}-x86_64-apple-darwin.tar.gz
+      source-ref: ${{ needs.package-record.outputs.source-ref }}
+
+  sign-arm64-linux:
+    needs: package-record
+    permissions: {attestations: write, contents: read, id-token: write}
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@643c5341b160be151a7fae19b89b6a4f8ab3b275 # 2026.8.6
+    with:
+      artifact-name: package-subjects
+      subject-path: holla-${{ needs.package-record.outputs.version }}-aarch64-unknown-linux-gnu.tar.gz
+      source-ref: ${{ needs.package-record.outputs.source-ref }}
+
+  sign-x86-linux:
+    needs: package-record
+    permissions: {attestations: write, contents: read, id-token: write}
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@643c5341b160be151a7fae19b89b6a4f8ab3b275 # 2026.8.6
+    with:
+      artifact-name: package-subjects
+      subject-path: holla-${{ needs.package-record.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
+      source-ref: ${{ needs.package-record.outputs.source-ref }}
+
+  sign-arm64-deb:
+    needs: package-record
+    permissions: {attestations: write, contents: read, id-token: write}
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@643c5341b160be151a7fae19b89b6a4f8ab3b275 # 2026.8.6
+    with:
+      artifact-name: package-subjects
+      subject-path: holla-${{ needs.package-record.outputs.version }}-aarch64-unknown-linux-gnu.deb
+      source-ref: ${{ needs.package-record.outputs.source-ref }}
+
+  sign-x86-deb:
+    needs: package-record
+    permissions: {attestations: write, contents: read, id-token: write}
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@643c5341b160be151a7fae19b89b6a4f8ab3b275 # 2026.8.6
+    with:
+      artifact-name: package-subjects
+      subject-path: holla-${{ needs.package-record.outputs.version }}-x86_64-unknown-linux-gnu.deb
+      source-ref: ${{ needs.package-record.outputs.source-ref }}
+
+  publish-package-record:
+    needs: [package-record, sign-arm64-macos, sign-x86-macos, sign-arm64-linux, sign-x86-linux, sign-arm64-deb, sign-x86-deb]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish missing package assets without replacement
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          for file in artifacts/holla-*.deb artifacts/holla-*.deb.sha256 artifacts/release-manifest.json artifacts/SHA256SUMS; do
+            name=$(basename "$file")
+            if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$RUNNER_TEMP/existing" >/dev/null 2>&1; then
+              test "$(sha256sum "$file" | awk '{print $1}')" = "$(sha256sum "$RUNNER_TEMP/existing/$name" | awk '{print $1}')"
+            else
+              gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
