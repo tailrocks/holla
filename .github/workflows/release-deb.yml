@@ -159,6 +159,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 1
+          fetch-tags: true
           persist-credentials: false
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -199,7 +202,7 @@ jobs:
             cp "$subject" signer-input/
           done
           source_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
-          test "$source_commit" = "$GITHUB_SHA"
+          test "$source_commit" = "$(git rev-parse HEAD)"
           jq -S -n --arg source_repository "$GITHUB_REPOSITORY" \
             --arg source_ref "refs/tags/$TAG" --arg source_commit "$source_commit" \
             --arg version "$version" --slurpfile assets assets.jsonl \
