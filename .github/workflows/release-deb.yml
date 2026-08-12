@@ -196,7 +196,11 @@ jobs:
           for subject in "${subjects[@]}"; do
             name=$(basename "$subject")
             digest=$(sha256sum "$subject" | awk '{print $1}')
-            test "$(cat "${subject}.sha256")" = "$digest"
+            checksum_lines=$(wc -l < "${subject}.sha256")
+            test "$checksum_lines" -eq 1
+            declared_digest=$(awk 'NF >= 1 {print $1}' "${subject}.sha256")
+            [[ "$declared_digest" =~ ^[0-9a-f]{64}$ ]]
+            test "$declared_digest" = "$digest"
             printf '%s  %s\n' "$digest" "$name" >> SHA256SUMS
             jq -cn --arg name "$name" --arg sha256 "$digest" '{name:$name,sha256:$sha256}' >> assets.jsonl
             cp "$subject" signer-input/
