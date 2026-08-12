@@ -44,10 +44,6 @@ jobs:
           set -euo pipefail
           ref="$GITHUB_REF"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            test "$GITHUB_REF" = "refs/heads/main" || {
-              echo "::error::workflow_dispatch releases must run from main"
-              exit 1
-            }
             if [ -n "$RELEASE_REF" ]; then
               case "$RELEASE_REF" in
                 v[0-9]*) ref="refs/tags/$RELEASE_REF" ;;
@@ -55,6 +51,11 @@ jobs:
                 *) echo "::error::release_ref must be a v-prefixed tag"; exit 1 ;;
               esac
             fi
+            case "$GITHUB_REF" in
+              refs/heads/main) test -n "$RELEASE_REF" ;;
+              refs/tags/v*) test -z "$RELEASE_REF" || test "$ref" = "$GITHUB_REF" ;;
+              *) echo "::error::workflow_dispatch releases require main plus release_ref, or the exact v* tag"; exit 1 ;;
+            esac
           fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
