@@ -1,6 +1,6 @@
 # Build holla .deb(s) for Linux on a version tag, attach them to the GitHub
-# Release (source), and (optionally) push them to the holla-apt repo so it can
-# publish the apt repository. This is the dedicated deb flow.
+# Release Debian artifacts in the source repository. Consumers pull and verify;
+# this workflow never writes or dispatches holla-apt.
 #
 # Both holla and velnor now use the exact same modern approach:
 # - jdx/mise-action to install rust + zig + cargo-zigbuild (project standard)
@@ -8,21 +8,17 @@
 # - cargo zigbuild --release --locked --target $TGT (modern glibc, no .2.17)
 # - cargo deb --target $TGT --no-build --deb-version "$VERSION"
 # - Matrix for amd64 + arm64
-# - Staging + artifact per target, then attach + optional cross to *-apt
+# - Staging + artifact per target, then attach to the source release
 #
 # We only target the latest and greatest Debian (recent glibc via zigbuild,
 # no old-glibc compatibility shims). $auto depends in
 # cargo-deb + modern target produce a .deb suitable for current Debian/Ubuntu.
 #
-# Separate from main release.yml (which does multi-platform tarballs +
-# Homebrew tap update) so that .debs can be cross-uploaded to holla-apt's
-# own releases (allowing publish.yml to consume them with default GITHUB_TOKEN).
+# Separate from main release.yml, which builds multi-platform tarballs.
 #
 # Why separate from the main release.yml?
 # - Main release handles multi-platform tarballs + Homebrew tap update.
-# - This workflow owns .deb production + the cross-repo upload to holla-apt
-#   (so holla-apt/publish.yml can download from *its own* releases using only
-#   its default GITHUB_TOKEN).
+# - This workflow owns .deb production in the source release only.
 on:
   push:
     tags: ["v*"]
@@ -182,28 +178,3 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 \
             || gh release create "$TAG" --title "$TAG" --generate-notes
           gh release upload "$TAG" artifacts/holla-*-unknown-linux-gnu.deb artifacts/holla-*-unknown-linux-gnu.deb.sha256 --clobber
-
-      - name: Push .deb(s) to holla-apt + trigger publish (optional)
-        if: matrix.config.writer
-        # Same pattern as velnor: the source may be private (or we want consistent
-        # delivery). holla-apt publishes from its *own* release. So we upload the
-        # .deb(s) to a holla-apt release (same tag), then trigger its publish workflow.
-        # Needs GH_HOLLA_APT_TOKEN: a PAT with Contents:write + Actions:write on
-        # tailrocks/holla-apt. Without it, publish manually (see echo below).
-        env:
-          APT_TOKEN: ${{ secrets.GH_HOLLA_APT_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${APT_TOKEN:-}" ]; then
-            echo "No GH_HOLLA_APT_TOKEN secret; skipping auto-publish to apt."
-            echo "Publish manually:"
-            echo "  gh release upload $TAG holla-*-unknown-linux-gnu.deb holla-*-unknown-linux-gnu.deb.sha256 --repo tailrocks/holla-apt --clobber"
-            echo "  gh workflow run publish.yml --repo tailrocks/holla-apt -f version=$TAG"
-            exit 0
-          fi
-          export GH_TOKEN="$APT_TOKEN"
-          gh release view "$TAG" --repo tailrocks/holla-apt >/dev/null 2>&1 \
-            || gh release create "$TAG" --repo tailrocks/holla-apt --title "holla $TAG (debs)" --notes "holla .debs for apt repository (amd64 + arm64)."
-          gh release upload "$TAG" artifacts/holla-*-unknown-linux-gnu.deb artifacts/holla-*-unknown-linux-gnu.deb.sha256 --repo tailrocks/holla-apt --clobber
-          gh workflow run publish.yml --repo tailrocks/holla-apt -f version="$TAG"
-          echo "Uploaded holla debs to holla-apt $TAG and triggered publish."
