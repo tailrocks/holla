@@ -291,7 +291,7 @@ jobs:
           ref: ${{ needs.audit.outputs.ref }}
 
       - name: Create tag
-        if: github.event_name == 'workflow_dispatch' && inputs.release_ref == '' && matrix.config.writer
+        if: github.event_name == 'workflow_dispatch' && inputs.release_ref == '' && !startsWith(github.ref, 'refs/tags/') && matrix.config.writer
         run: |
           git tag "v${VERSION}"
           git push origin "v${VERSION}"
