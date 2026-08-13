@@ -11,10 +11,10 @@ use ratatui::{
 use termrock::{
     input::KeyCode,
     interaction::Outcome,
-    style::{Density, DesignTokens, Role, Theme},
+    style::{Density, DesignSystem as Theme, PanelChrome, Role},
     widgets::{
-        Hint, HintBar, List, ListRow, ListState, Panel, PanelEmphasis, Progress, ProgressKind,
-        RowRole, StatusBar, StatusBarState, StatusSlot,
+        Hint, HintBar, List, ListRow, ListState, Panel, Progress, ProgressKind, RowRole, StatusBar,
+        StatusBarState, StatusSlot,
     },
 };
 
@@ -99,8 +99,8 @@ pub async fn run(filter: Option<&'static str>) -> anyhow::Result<()> {
     let mut active = Vec::new();
     fill_sizers(&views, &mut active, &mut next_sizer);
 
-    let theme = Theme::tailrocks_phosphor();
-    let tokens = DesignTokens::new(theme.clone(), Density::default());
+    let theme = Theme::phosphor();
+    let tokens = theme.clone().density(Density::default());
     let mut overview_state = ListState::new(views.first().map(|view| view.spec.id));
     overview_state.enable_multi_select();
     let mut detail_state = ListState::<PathBuf>::new(None);
@@ -189,6 +189,10 @@ pub async fn run(filter: Option<&'static str>) -> anyhow::Result<()> {
                 priority: 2,
                 min_width: 8,
                 enabled: true,
+                region: termrock::widgets::StatusRegion::Left,
+                kind: termrock::widgets::StatusKind::Text,
+                glyph: None,
+                style_explicit: true,
                 style: theme.style(Role::Accent),
                 hover_style: None,
             }];
@@ -198,6 +202,10 @@ pub async fn run(filter: Option<&'static str>) -> anyhow::Result<()> {
                 priority: 1,
                 min_width: 12,
                 enabled: true,
+                region: termrock::widgets::StatusRegion::Left,
+                kind: termrock::widgets::StatusKind::Text,
+                glyph: None,
+                style_explicit: true,
                 style: theme.style(Role::TextMuted),
                 hover_style: None,
             }];
@@ -224,7 +232,7 @@ pub async fn run(filter: Option<&'static str>) -> anyhow::Result<()> {
                 } else {
                     " Cleanup categories "
                 })
-                .emphasis(PanelEmphasis::Focused);
+                .emphasis(PanelChrome::Focused);
             let inner = panel.inner(list_area);
             frame.render_widget(&panel, list_area);
             if detail.is_some() {
@@ -390,6 +398,9 @@ fn overview_rows(
                 secondary: None,
                 badge: None,
                 shortcut: None,
+                status: None,
+                actions: None,
+                custom: None,
                 trailing: Some(Line::styled(
                     if !view.finished && sizing {
                         format!("{} · sizing…", format_size(total, DECIMAL))
@@ -433,6 +444,9 @@ fn candidate_rows(view: &InsightView, theme: &Theme) -> Vec<ListRow<'static, Pat
                 secondary: None,
                 badge: None,
                 shortcut: None,
+                status: None,
+                actions: None,
+                custom: None,
                 trailing: Some(Line::styled(
                     format_size(candidate.size, DECIMAL),
                     theme.style(Role::TextMuted),
@@ -571,7 +585,7 @@ mod tests {
             )],
             finished: true,
         };
-        let rows = candidate_rows(&view, &Theme::tailrocks_phosphor());
+        let rows = candidate_rows(&view, &Theme::phosphor());
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].enabled);
         assert!(rows[0].label.to_string().contains("too recent"));

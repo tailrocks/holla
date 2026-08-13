@@ -4,12 +4,12 @@ use humansize::{DECIMAL, format_size};
 use ratatui::text::{Line, Text};
 use termrock::{
     input::{KeyCode, KeyEvent},
-    interaction::{ModalStack, Outcome},
+    interaction::Outcome,
     layout::centered_rect,
-    style::{Role, Theme},
+    style::{DesignSystem as Theme, PanelChrome, Role},
     widgets::{
         Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, DetailCapability,
-        DetailRow, DetailTableState, Dialog, MessageDialog, PanelEmphasis, Progress, ProgressKind,
+        DetailRow, DetailTableState, Dialog, MessageDialog, Progress, ProgressKind,
     },
 };
 
@@ -99,7 +99,7 @@ pub enum CleanupPoll {
 
 #[derive(Default)]
 pub struct CleanupFlow {
-    modals: ModalStack<CleanupModal>,
+    modal: Option<CleanupModal>,
     exit_after_delete: bool,
 }
 
@@ -109,7 +109,7 @@ impl CleanupFlow {
     }
 
     pub fn is_open(&self) -> bool {
-        self.modals.is_open()
+        self.modal.is_some()
     }
 
     pub fn open_confirmation(&mut self, items: Vec<CleanupItem>) {
@@ -117,7 +117,7 @@ impl CleanupFlow {
         let total = items
             .iter()
             .fold(0_u64, |sum, item| sum.saturating_add(item.size));
-        self.modals.open(CleanupModal::Confirm {
+        self.modal = Some(CleanupModal::Confirm {
             items,
             total,
             mode: DeleteMode::Trash,
@@ -127,7 +127,7 @@ impl CleanupFlow {
     }
 
     pub fn poll(&mut self) -> CleanupPoll {
-        let completed = match self.modals.current_mut() {
+        let completed = match self.modal.as_mut() {
             Some(CleanupModal::Deleting {
                 report,
                 mode,
@@ -151,7 +151,7 @@ impl CleanupFlow {
         if self.exit_after_delete {
             return CleanupPoll::Exit;
         }
-        self.modals.open(CleanupModal::Report {
+        self.modal = Some(CleanupModal::Report {
             report,
             mode,
             state: Box::default(),
@@ -172,7 +172,7 @@ impl CleanupFlow {
             ExitAfterDelete,
         }
 
-        let effect = match self.modals.current_mut() {
+        let effect = match self.modal.as_mut() {
             Some(CleanupModal::Confirm {
                 items,
                 mode,
@@ -232,11 +232,13 @@ impl CleanupFlow {
         match effect {
             Effect::None => {}
             Effect::Close => {
-                self.modals.pop();
+                self.modal = None;
             }
-            Effect::OpenQuit => self.modals.open_sub(CleanupModal::QuitRunning {
-                state: ChoiceDialogState::new(Some(QuitChoice::Stay)),
-            }),
+            Effect::OpenQuit => {
+                self.modal = Some(CleanupModal::QuitRunning {
+                    state: ChoiceDialogState::new(Some(QuitChoice::Stay)),
+                })
+            }
             Effect::Start {
                 items,
                 mode,
@@ -291,7 +293,7 @@ impl CleanupFlow {
                     });
                     let _ = sender.send(report);
                 });
-                self.modals.open(CleanupModal::Deleting {
+                self.modal = Some(CleanupModal::Deleting {
                     report,
                     mode,
                     first_path,
@@ -299,13 +301,13 @@ impl CleanupFlow {
             }
             Effect::ExitAfterDelete => {
                 self.exit_after_delete = true;
-                self.modals.pop();
+                self.modal = None;
             }
         }
     }
 
     pub fn render(&mut self, frame: &mut ratatui::Frame<'_>, theme: &Theme, tick: u64) {
-        let Some(modal) = self.modals.current_mut() else {
+        let Some(modal) = self.modal.as_mut() else {
             return;
         };
         frame.render_widget(Backdrop::default(), frame.area());
@@ -468,7 +470,7 @@ fn render_confirm(
         &ChoiceDialog::new(
             Dialog::new("Confirm cleanup", Text::from(body), theme)
                 .style(theme.style(Role::Text))
-                .emphasis(PanelEmphasis::Focused),
+                .emphasis(PanelChrome::Focused),
             &actions,
         )
         .gap("  "),
@@ -495,7 +497,7 @@ fn render_deleting(
             theme,
         )
         .style(theme.style(Role::Text))
-        .emphasis(PanelEmphasis::Focused),
+        .emphasis(PanelChrome::Focused),
         area,
     );
     frame.render_widget(
@@ -527,7 +529,7 @@ fn render_quit(
                 theme,
             )
             .style(theme.style(Role::Text))
-            .emphasis(PanelEmphasis::Focused),
+            .emphasis(PanelChrome::Focused),
             &actions,
         )
         .gap("  "),
@@ -674,7 +676,7 @@ fn render_report(
                 theme,
             )
             .style(theme.style(Role::Text))
-            .emphasis(PanelEmphasis::Focused),
+            .emphasis(PanelChrome::Focused),
             &details,
             theme,
         )
@@ -703,13 +705,13 @@ mod tests {
             dry_run,
             state,
             ..
-        }) = flow.modals.current_mut()
+        }) = flow.modal.as_mut()
         else {
             panic!("confirmation")
         };
         assert_eq!(*mode, DeleteMode::Trash);
         assert!(!*dry_run);
-        assert_eq!(state.focused, Some(DeleteChoice::Cancel));
+        assert_eq!(state.cursor(), Some(&DeleteChoice::Cancel));
     }
 
     #[test]
@@ -726,7 +728,7 @@ mod tests {
         flow.open_confirmation(Vec::new());
         flow.handle_key(key(KeyCode::Char('p')));
         flow.handle_key(key(KeyCode::Char('n')));
-        let Some(CleanupModal::Confirm { mode, dry_run, .. }) = flow.modals.current_mut() else {
+        let Some(CleanupModal::Confirm { mode, dry_run, .. }) = flow.modal.as_mut() else {
             panic!("confirmation")
         };
         assert_eq!(*mode, DeleteMode::Permanent);

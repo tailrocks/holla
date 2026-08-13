@@ -29,11 +29,11 @@ use std::{
 use termrock::{
     input::KeyCode,
     layout::centered_rect,
-    style::{Density, DesignTokens, Role, Theme},
+    style::{Density, DesignSystem as Theme, PanelChrome, Role},
     widgets::{
-        Backdrop, Hint, HintBar, List, ListRow, ListState, Panel, PanelEmphasis, Progress,
-        ProgressKind, RowRole, StatusBar, StatusBarState, StatusSlot, TextInput, TextInputOutcome,
-        TextInputState, Tree, TreeNode, TreeNodeStatus, TreeOutcome, TreeState, Validation,
+        Backdrop, Hint, HintBar, List, ListRow, ListState, Panel, Progress, ProgressKind, RowRole,
+        StatusBar, StatusBarState, StatusSlot, TextInput, TextInputOutcome, TextInputState, Tree,
+        TreeNode, TreeNodeStatus, TreeOutcome, TreeState, Validation,
     },
 };
 
@@ -280,6 +280,9 @@ impl CachedProjection {
                 secondary: None,
                 badge: None,
                 shortcut: None,
+                actions: None,
+                tone: termrock::widgets::ToneTier::Primary,
+                parent: None,
                 trailing: Some(Line::styled(
                     format!(
                         "{} · cached {} ago",
@@ -327,8 +330,8 @@ impl CachedProjection {
 
 pub async fn overview() -> anyhow::Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("home directory is unavailable"))?;
-    let theme = Theme::tailrocks_phosphor();
-    let tokens = DesignTokens::new(theme.clone(), Density::default());
+    let theme = Theme::phosphor();
+    let tokens = theme.clone().density(Density::default());
     let items = overview_items(&home, &SizeCache::load(), SystemTime::now());
     let rows = overview_rows(&items, SystemTime::now(), &theme);
     let mut state = ListState::new(rows.first().map(|row| row.id));
@@ -354,7 +357,7 @@ pub async fn overview() -> anyhow::Result<()> {
             );
             let panel = Panel::new(&tokens)
                 .title(" Places to inspect ")
-                .emphasis(PanelEmphasis::Focused);
+                .emphasis(PanelChrome::Focused);
             let inner = panel.inner(list_area);
             frame.render_widget(&panel, list_area);
             if rows.is_empty() {
@@ -490,6 +493,9 @@ fn overview_rows(
                 secondary: None,
                 badge: None,
                 shortcut: None,
+                status: None,
+                actions: None,
+                custom: None,
                 trailing: Some(Line::styled(trailing, theme.style(Role::TextMuted))),
                 role: RowRole::Item,
                 enabled: true,
@@ -656,6 +662,9 @@ fn merged_projection(
             secondary: None,
             badge: None,
             shortcut: None,
+            actions: None,
+            tone: termrock::widgets::ToneTier::Primary,
+            parent: None,
             trailing: Some(trailing),
             depth,
             branch,
@@ -771,8 +780,8 @@ fn capture_baseline(root: &Path) -> BaselineTask {
 }
 
 async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Result<()> {
-    let theme = Theme::tailrocks_phosphor();
-    let tokens = DesignTokens::new(theme.clone(), Density::default());
+    let theme = Theme::phosphor();
+    let tokens = theme.clone().density(Density::default());
     let now = SystemTime::now();
     let cached = CachedProjection::new(&root, SizeCache::load().valid_below(&root, now));
     let mut cache_active = !cached.is_empty();
@@ -1028,6 +1037,10 @@ async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Res
                 priority: 2,
                 min_width: 8,
                 enabled: true,
+                region: termrock::widgets::StatusRegion::Left,
+                kind: termrock::widgets::StatusKind::Text,
+                glyph: None,
+                style_explicit: true,
                 style: theme.style(Role::Accent),
                 hover_style: None,
             }];
@@ -1037,6 +1050,10 @@ async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Res
                 priority: 1,
                 min_width: 12,
                 enabled: true,
+                region: termrock::widgets::StatusRegion::Left,
+                kind: termrock::widgets::StatusKind::Text,
+                glyph: None,
+                style_explicit: true,
                 style: theme.style(Role::TextMuted),
                 hover_style: None,
             }];
@@ -1079,7 +1096,7 @@ async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Res
                 } else {
                     " Disk usage "
                 })
-                .emphasis(PanelEmphasis::Focused);
+                .emphasis(PanelChrome::Focused);
             let inner = panel.inner(tree_area);
             frame.render_widget(&panel, tree_area);
             if view == AnalyzerView::Tree {
@@ -1234,8 +1251,8 @@ async fn run_with_view(root: PathBuf, initial_view: AnalyzerView) -> anyhow::Res
 }
 
 pub async fn prompt_path() -> anyhow::Result<Option<PathBuf>> {
-    let theme = Theme::tailrocks_phosphor();
-    let tokens = DesignTokens::new(theme.clone(), Density::default());
+    let theme = Theme::phosphor();
+    let tokens = theme.clone().density(Density::default());
     let initial = std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
@@ -1254,7 +1271,7 @@ pub async fn prompt_path() -> anyhow::Result<Option<PathBuf>> {
             let area = centered_rect(76, 7, frame.area());
             let panel = Panel::new(&tokens)
                 .title(" Analyze a path ")
-                .emphasis(PanelEmphasis::Focused);
+                .emphasis(PanelChrome::Focused);
             let inner = panel.inner(area);
             frame.render_widget(&panel, area);
             let [copy_area, input_area, error_area, hints_area] = Layout::vertical([
@@ -1412,6 +1429,9 @@ fn top_file_rows(files: Option<&TopFiles>) -> Vec<ListRow<'static, usize>> {
             secondary: None,
             badge: None,
             shortcut: None,
+            status: None,
+            actions: None,
+            custom: None,
             trailing: Some(Line::from(format_size(file.on_disk, DECIMAL))),
             role: RowRole::Item,
             enabled: true,
@@ -1504,6 +1524,9 @@ fn project_tree(
             secondary: None,
             badge: None,
             shortcut: None,
+            actions: None,
+            tone: termrock::widgets::ToneTier::Primary,
+            parent: None,
             trailing: Some(Line::from(trailing)),
             depth,
             branch,
@@ -1728,7 +1751,7 @@ mod tests {
             &HashSet::from([cached.root_id().unwrap()]),
             SortKey::OnDisk,
             UNIX_EPOCH + Duration::from_secs(200),
-            &Theme::default(),
+            &Theme::phosphor(),
         );
 
         assert_eq!(rows.len(), 3);
@@ -1740,7 +1763,7 @@ mod tests {
     #[test]
     fn cached_projection_is_visually_distinct_until_live_replacement() {
         let root = PathBuf::from("/tmp/root");
-        let theme = Theme::tailrocks_phosphor();
+        let theme = Theme::phosphor();
         let cached = CachedProjection::new(&root, vec![(root.clone(), cached_size(30))]);
         let rows = cached.rows(
             &HashSet::from([cached.root_id().unwrap()]),
@@ -1786,7 +1809,7 @@ mod tests {
                 sort: SortKey::OnDisk,
                 now: UNIX_EPOCH + Duration::from_secs(200),
             },
-            &Theme::default(),
+            &Theme::phosphor(),
         );
         let mut state = TreeState::new(Some(hidden.clone()));
         state.enable_multi_select();
@@ -1819,7 +1842,7 @@ mod tests {
         let mut tree = ScanTree::new("root".into(), true);
         let large = tree.add_dir(tree.root(), "large".into());
         let expanded = HashSet::from([root.clone(), root.join("large")]);
-        let theme = Theme::default();
+        let theme = Theme::phosphor();
         let projection = merged_projection(
             &root,
             Some(&tree),
@@ -1940,7 +1963,7 @@ mod tests {
         let rows = overview_rows(
             &items,
             UNIX_EPOCH + Duration::from_secs(200),
-            &Theme::default(),
+            &Theme::phosphor(),
         );
 
         assert!(
@@ -1959,7 +1982,7 @@ mod tests {
 
     #[test]
     fn overview_projection_distinguishes_detected_insights() {
-        let theme = Theme::tailrocks_phosphor();
+        let theme = Theme::phosphor();
         let items = vec![OverviewItem {
             path: PathBuf::from("/tmp/cache"),
             label: "Package cache · /tmp/cache".into(),

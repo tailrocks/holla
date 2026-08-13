@@ -16,11 +16,11 @@ use termrock::{
     keymap::{KeyBinding, KeyChord, Keymap, Visibility},
     layout::centered_rect,
     osc::{ClipboardSelection, ClipboardWrite, encode_clipboard},
-    style::{Density, DesignTokens, Role, Theme},
+    style::{Density, DesignSystem as Theme, PanelChrome, Role},
     widgets::{
         Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, List, ListRow,
-        ListState, Panel, PanelEmphasis, RowRole, TextInput, TextInputOutcome, TextInputState,
-        Validation, render_hint_bar,
+        ListState, Panel, RowRole, TextInput, TextInputOutcome, TextInputState, Validation,
+        render_hint_bar,
     },
 };
 use tokio::process::Command;
@@ -80,8 +80,8 @@ static FINDER_KEYMAP: Keymap<FinderKey> = Keymap::from_static(FINDER_BINDINGS);
 pub async fn run() -> anyhow::Result<()> {
     let home = dirs::home_dir().context("home directory is unavailable")?;
     let index = FileIndex::build(vec![home.clone()]);
-    let theme = Theme::tailrocks_phosphor();
-    let tokens = DesignTokens::new(theme.clone(), Density::default());
+    let theme = Theme::phosphor();
+    let tokens = theme.clone().density(Density::default());
     let mut input = TextInputState::new("").with_allow_empty(true);
     let mut list_state = ListState::<PathBuf>::new(None);
     let mut pending: Option<PendingAction> = None;
@@ -119,7 +119,7 @@ pub async fn run() -> anyhow::Result<()> {
             );
             let panel = Panel::new(&tokens)
                 .title(" Files and folders ")
-                .emphasis(PanelEmphasis::Focused);
+                .emphasis(PanelChrome::Focused);
             let inner = panel.inner(list_area);
             frame.render_widget(&panel, list_area);
             frame.render_stateful_widget(&List::new(&rows, &tokens), inner, &mut list_state);
@@ -158,7 +158,7 @@ pub async fn run() -> anyhow::Result<()> {
                     &ChoiceDialog::new(
                         Dialog::new("File action", body, &theme)
                             .style(theme.style(Role::Text))
-                            .emphasis(PanelEmphasis::Focused),
+                            .emphasis(PanelChrome::Focused),
                         &actions,
                     )
                     .gap("  "),
@@ -358,6 +358,9 @@ fn result_rows(hits: &[FileHit], theme: &Theme) -> Vec<ListRow<'static, PathBuf>
                 secondary: None,
                 badge: None,
                 shortcut: None,
+                status: None,
+                actions: None,
+                custom: None,
                 trailing: None,
                 role: RowRole::Item,
                 enabled: true,
@@ -401,7 +404,7 @@ mod tests {
 
     #[test]
     fn utf8_byte_ranges_highlight_whole_graphemes() {
-        let theme = Theme::default();
+        let theme = Theme::phosphor();
         let line = highlighted_bytes("résumé", 0, &[(1, 3)], Role::Text, &theme);
         assert_eq!(line.spans[1].content, "é");
         assert_eq!(line.spans[1].style, theme.style(Role::Accent));
@@ -410,7 +413,7 @@ mod tests {
 
     #[test]
     fn result_row_projects_filename_and_parent_offsets() {
-        let theme = Theme::default();
+        let theme = Theme::phosphor();
         let hit = FileHit {
             path: PathBuf::from("/tmp/projects/résumé.txt"),
             relative_path: "projects/résumé.txt".into(),

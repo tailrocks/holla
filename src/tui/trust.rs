@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use termrock::{
     interaction::Outcome,
     layout::centered_rect,
-    style::{Role, Theme},
-    widgets::{Action, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, PanelEmphasis},
+    style::{DesignSystem as Theme, PanelChrome, Role},
+    widgets::{Action, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog},
 };
 
 static ASSUME_TRUST: AtomicBool = AtomicBool::new(false);
@@ -28,7 +28,7 @@ pub fn assumed() -> bool {
 }
 
 pub fn confirm(argv: &[String]) -> anyhow::Result<bool> {
-    let theme = Theme::tailrocks_phosphor();
+    let theme = Theme::phosphor();
     let actions = [
         Action {
             id: TrustChoice::Cancel,
@@ -70,7 +70,7 @@ pub fn confirm(argv: &[String]) -> anyhow::Result<bool> {
                 &ChoiceDialog::new(
                     Dialog::new("Trust project action", Text::from(lines), &theme)
                         .style(theme.style(Role::Text))
-                        .emphasis(PanelEmphasis::Focused),
+                        .emphasis(PanelChrome::Focused),
                     &actions,
                 )
                 .gap("  "),
