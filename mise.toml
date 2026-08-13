@@ -7,3 +7,15 @@ zig = "0.16.0"
 [settings]
 idiomatic_version_file_enable_tools = ["rust"]
 lockfile = true
+
+[tasks.ci]
+run = "cargo check --all-targets --all-features --locked"
+
+[tasks.test]
+run = "cargo nextest run --all-features --color=always --no-tests=pass"
+
+[tasks.lint]
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks.fmt]
+run = "cargo fmt --all --check"
