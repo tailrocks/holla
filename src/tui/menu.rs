@@ -11,11 +11,11 @@ use termrock::{
     keymap::{KeyBinding, KeyChord, Keymap, Visibility},
     layout::centered_rect,
     scroll::{DialogScroll, max_line_width},
-    style::{Density, DesignTokens, Role, Theme},
+    style::{Density, DesignSystem as Theme, PanelChrome, Role},
     widgets::{
         Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, List, ListRow,
-        ListState, Panel, PanelEmphasis, RowRole, Severity, StatusBar, StatusBarState, StatusSlot,
-        TextInput, TextInputOutcome, TextInputState, Toast, Validation, Viewport, render_hint_bar,
+        ListState, Panel, RowRole, Severity, StatusBar, StatusBarState, StatusSlot, TextInput,
+        TextInputOutcome, TextInputState, Toast, Validation, Viewport, render_hint_bar,
     },
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -211,6 +211,9 @@ fn menu_rows_with_history(
                 secondary: None,
                 badge: None,
                 shortcut: None,
+                status: None,
+                actions: None,
+                custom: None,
                 trailing: None,
                 role: RowRole::Separator,
                 enabled: false,
@@ -226,6 +229,9 @@ fn menu_rows_with_history(
                 secondary: None,
                 badge: None,
                 shortcut: None,
+                status: None,
+                actions: None,
+                custom: None,
                 trailing: None,
                 role: RowRole::Item,
                 enabled: true,
@@ -242,6 +248,9 @@ fn menu_rows_with_history(
                     secondary: None,
                     badge: None,
                     shortcut: None,
+                    status: None,
+                    actions: None,
+                    custom: None,
                     trailing: None,
                     role: RowRole::Separator,
                     enabled: false,
@@ -259,6 +268,9 @@ fn menu_rows_with_history(
                 secondary: None,
                 badge: None,
                 shortcut: None,
+                status: None,
+                actions: None,
+                custom: None,
                 trailing: None,
                 role: RowRole::Item,
                 enabled: true,
@@ -283,6 +295,9 @@ fn menu_rows_with_history(
                 secondary: None,
                 badge: None,
                 shortcut: None,
+                status: None,
+                actions: None,
+                custom: None,
                 trailing: None,
                 role: RowRole::Item,
                 enabled: true,
@@ -400,8 +415,8 @@ fn needs_confirmation(action: &ActionSpec) -> bool {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    let theme = Theme::tailrocks_phosphor();
-    let tokens = DesignTokens::new(theme.clone(), Density::default());
+    let theme = Theme::phosphor();
+    let tokens = theme.clone().density(Density::default());
     let mut menu = Menu::default();
     let mut scans: Option<mpsc::Receiver<ScanEvent>> = None;
     let mut scanning = true;
@@ -488,7 +503,6 @@ pub async fn run() -> anyhow::Result<()> {
                     .map(|row| row.id.clone()),
             );
         }
-        list_state.set_focused(!preview_focused);
         let preview = preview_lines(&menu, list_state.selected(), &theme);
         let preview_width = max_line_width(&preview);
         let mut preview_viewport = (0usize, 0usize);
@@ -519,6 +533,10 @@ pub async fn run() -> anyhow::Result<()> {
                 priority: 2,
                 min_width: 0,
                 enabled: true,
+                region: termrock::widgets::StatusRegion::Left,
+                kind: termrock::widgets::StatusKind::Text,
+                glyph: None,
+                style_explicit: true,
                 style: theme.style(Role::Accent),
                 hover_style: None,
             }];
@@ -528,6 +546,10 @@ pub async fn run() -> anyhow::Result<()> {
                 priority: 1,
                 min_width: 8,
                 enabled: !context.is_empty(),
+                region: termrock::widgets::StatusRegion::Left,
+                kind: termrock::widgets::StatusKind::Text,
+                glyph: None,
+                style_explicit: true,
                 style: theme.style(Role::TextMuted),
                 hover_style: None,
             }];
@@ -547,13 +569,17 @@ pub async fn run() -> anyhow::Result<()> {
             let list_panel = Panel::new(&tokens)
                 .title(" holla ")
                 .emphasis(if preview_focused {
-                    PanelEmphasis::Normal
+                    PanelChrome::Normal
                 } else {
-                    PanelEmphasis::Focused
+                    PanelChrome::Focused
                 });
             let list_inner = list_panel.inner(list_area);
             frame.render_widget(&list_panel, list_area);
-            frame.render_stateful_widget(&List::new(&rows, &tokens), list_inner, &mut list_state);
+            frame.render_stateful_widget(
+                &List::new(&rows, &tokens).focused(!preview_focused),
+                list_inner,
+                &mut list_state,
+            );
 
             preview_viewport = (
                 usize::from(preview_area.height.saturating_sub(2)),
@@ -563,9 +589,9 @@ pub async fn run() -> anyhow::Result<()> {
                 &Viewport::new(&preview, &theme)
                     .title("Preview")
                     .emphasis(if preview_focused {
-                        PanelEmphasis::Focused
+                        PanelChrome::Focused
                     } else {
-                        PanelEmphasis::Normal
+                        PanelChrome::Normal
                     })
                     .content_style(theme.style(Role::Text)),
                 preview_area,
@@ -612,7 +638,7 @@ pub async fn run() -> anyhow::Result<()> {
                     &ChoiceDialog::new(
                         Dialog::new("Confirm action", Text::from(body), &theme)
                             .style(theme.style(Role::Text))
-                            .emphasis(PanelEmphasis::Focused),
+                            .emphasis(PanelChrome::Focused),
                         &confirm_actions,
                     )
                     .gap("  "),
@@ -988,7 +1014,7 @@ mod tests {
                 ],
             },
         ]);
-        let rows = menu_rows(&menu, "", &Theme::default());
+        let rows = menu_rows(&menu, "", &Theme::phosphor());
 
         assert_eq!(rows.len(), 6);
         assert_eq!(rows[0].role, RowRole::Separator);
@@ -1007,7 +1033,7 @@ mod tests {
             actions: vec![test_action("one", "one", Danger::Safe)],
         }]);
 
-        let rows = menu_rows(&menu, " \t ", &Theme::default());
+        let rows = menu_rows(&menu, " \t ", &Theme::phosphor());
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].role, RowRole::Separator);
@@ -1029,7 +1055,7 @@ mod tests {
             },
         ]);
 
-        let rows = menu_rows(&menu, "", &Theme::default());
+        let rows = menu_rows(&menu, "", &Theme::phosphor());
 
         assert_eq!(
             rows.iter()
@@ -1049,7 +1075,7 @@ mod tests {
         let mut history = FrecencyStore::default();
         history.record("one", "", 100);
 
-        let rows = menu_rows_with_history(&menu, "", &Theme::default(), &history, 100);
+        let rows = menu_rows_with_history(&menu, "", &Theme::phosphor(), &history, 100);
 
         assert_eq!(row_id(&rows[0].id), "separator:recent");
         assert_eq!(row_id(&rows[1].id), "recent:one");
@@ -1073,7 +1099,7 @@ mod tests {
             history.record(&format!("action-{index}"), "", 100 + index);
         }
 
-        let rows = menu_rows_with_history(&menu, "", &Theme::default(), &history, 106);
+        let rows = menu_rows_with_history(&menu, "", &Theme::phosphor(), &history, 106);
 
         assert_eq!(
             rows.iter()
@@ -1091,7 +1117,7 @@ mod tests {
             actions: vec![test_action("accent", "e\u{301}clair", Danger::Safe)],
         }]);
 
-        let rows = menu_rows(&menu, "e", &Theme::default());
+        let rows = menu_rows(&menu, "e", &Theme::phosphor());
 
         assert!(
             rows[0]
@@ -1104,7 +1130,7 @@ mod tests {
 
     #[test]
     fn group_and_keyword_matches_have_visible_accents() {
-        let theme = Theme::default();
+        let theme = Theme::phosphor();
         let menu = Menu::from_groups(vec![GroupSpec {
             id: "docker".into(),
             title: "Docker".into(),

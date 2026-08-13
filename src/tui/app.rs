@@ -20,10 +20,10 @@ use termrock::{
     keymap::{KeyBinding, KeyChord, Keymap, Visibility},
     layout::centered_rect,
     scroll::{DialogScroll, TailScroll},
-    style::{Role, Theme},
+    style::{DesignSystem as Theme, PanelChrome, Role},
     widgets::{
-        Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, PanelEmphasis,
-        StatusBar, StatusBarState, StatusSlot, Tab, Tabs, TabsState, Viewport, render_hint_bar,
+        Action as DialogAction, Backdrop, ChoiceDialog, ChoiceDialogState, Dialog, StatusBar,
+        StatusBarState, StatusSlot, Tab, Tabs, TabsState, Viewport, render_hint_bar,
     },
 };
 use tokio::{
@@ -595,13 +595,11 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
     let (tx, rx) = mpsc::channel();
     let mut supervisor = TaskSupervisor::new(spawn_tasks(task_defs, parallel, tx));
     let events = rx;
-    let theme = Theme::tailrocks_phosphor();
+    let theme = Theme::phosphor();
     let mut selected = 0usize;
-    let mut tabs_state = TabsState {
-        selected: Some(selected),
-        focused: true,
-        ..TabsState::default()
-    };
+    let mut tabs_state = TabsState::default();
+    tabs_state.selected = Some(selected);
+    tabs_state.focused = true;
     let mut status_state = StatusBarState::default();
     let mut cancel_dialog: Option<ChoiceDialogState<CancelChoice>> = None;
     let cancel_actions = [
@@ -667,6 +665,10 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 priority: 2,
                 min_width: 0,
                 enabled: true,
+                region: termrock::widgets::StatusRegion::Left,
+                kind: termrock::widgets::StatusKind::Text,
+                glyph: None,
+                style_explicit: true,
                 style: theme.style(Role::Accent),
                 hover_style: None,
             }];
@@ -676,6 +678,10 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 priority: 1,
                 min_width: 10,
                 enabled: true,
+                region: termrock::widgets::StatusRegion::Left,
+                kind: termrock::widgets::StatusKind::Text,
+                glyph: None,
+                style_explicit: true,
                 style: theme.style(if failed > 0 {
                     Role::Danger
                 } else {
@@ -702,6 +708,9 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                         TaskState::Done(true) => Span::styled("✓", theme.style(Role::Success)),
                         TaskState::Done(false) => Span::styled("✗", theme.style(Role::Danger)),
                     }),
+                    badge: None,
+                    status: termrock::widgets::TabStatus::None,
+                    closable: false,
                     active: index == selected,
                     enabled: true,
                 })
@@ -730,7 +739,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
             frame.render_stateful_widget(
                 &Viewport::new(&output_lines, &theme)
                     .title(tasks[selected].label.as_str())
-                    .emphasis(PanelEmphasis::Focused)
+                    .emphasis(PanelChrome::Focused)
                     .content_style(theme.style(Role::Text)),
                 output_area,
                 &mut viewport_state,
@@ -754,7 +763,7 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                             &theme,
                         )
                         .style(theme.style(Role::Text))
-                        .emphasis(PanelEmphasis::Focused),
+                        .emphasis(PanelChrome::Focused),
                         &cancel_actions,
                     )
                     .gap("  "),
