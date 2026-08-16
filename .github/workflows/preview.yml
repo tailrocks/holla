@@ -285,9 +285,42 @@ jobs:
             holla-${{ matrix.target }}.tar.gz
             holla-${{ matrix.target }}.tar.gz.sha256
 
+  attest:
+    name: Attest preview archives on GitHub
+    needs: [audit, rust, macos]
+    if: needs.audit.outputs.source == 'true'
+    runs-on: ${{ 'ubuntu-26.04' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Validate exact archive set
+        run: |
+          set -euo pipefail
+          find artifacts -maxdepth 1 -type f -name 'holla-*.tar.gz' -print | sort > actual
+          cat > expected <<'EOF'
+          artifacts/holla-aarch64-apple-darwin.tar.gz
+          artifacts/holla-aarch64-unknown-linux-gnu.tar.gz
+          artifacts/holla-x86_64-apple-darwin.tar.gz
+          artifacts/holla-x86_64-unknown-linux-gnu.tar.gz
+          EOF
+          diff -u expected actual
+
+      - name: Attest every preview archive
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/holla-*.tar.gz
+
   release:
     name: Publish preview (${{ matrix.config.lane }})
-    needs: [audit, rust, macos]
+    needs: [audit, rust, macos, attest]
     if: needs.audit.outputs.source == 'true'
     strategy:
       fail-fast: false
