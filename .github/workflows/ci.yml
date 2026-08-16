@@ -103,7 +103,7 @@ jobs:
       actions: read
       contents: read
       pull-requests: read
-    uses: jackin-project/velnor-actions/.github/workflows/ci-code.yml@5284c3b23c4873540f75dcf376a802adf3fc9b13 # 2026.8.25
+    uses: jackin-project/velnor-actions/.github/workflows/ci-code.yml@46a245b602c2385a3e492f98aa46bea9d483aa53 # 2026.8.27
     with:
       lane: ${{ github.event_name == 'workflow_dispatch' && inputs.lane || 'velnor' }}
       recovery_proof_id: ${{ inputs.recovery_proof_id || '' }}
