@@ -147,7 +147,7 @@ jobs:
 
   package-record:
     needs: rust
-    runs-on: ubuntu-latest
+    runs-on: ${{ 'ubuntu-26.04' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -284,7 +284,7 @@ jobs:
 
   publish-package-record:
     needs: [package-record, sign-arm64-macos, sign-x86-macos, sign-arm64-linux, sign-x86-linux, sign-arm64-deb, sign-x86-deb]
-    runs-on: ubuntu-latest
+    runs-on: ${{ 'ubuntu-26.04' }}
     timeout-minutes: 15
     permissions:
       contents: write
