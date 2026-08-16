@@ -147,7 +147,7 @@ jobs:
       actions: read
       contents: read
       pull-requests: read
-    uses: ChainArgos/velnor-actions/.github/workflows/ci-code.yml@a4170e1faad7fe5962d3313968ba1a7e0979c55a # 2026.8.25
+    uses: ChainArgos/velnor-actions/.github/workflows/ci-code.yml@b1d1ae10ec660a522a3d3dd87f12ce9e7653a2c4 # 2026.8.27
     with:
       lane: ${{ github.event_name == 'workflow_dispatch' && inputs.lane || 'velnor' }}
       recovery_proof_id: ${{ inputs.recovery_proof_id || '' }}
