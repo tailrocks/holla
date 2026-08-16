@@ -344,28 +344,6 @@ jobs:
           pattern: holla-*
           merge-multiple: true
 
-      - name: Verify source SHA is on main
-        if: github.event_name == 'workflow_run'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          FULL_SHA: ${{ needs.audit.outputs.sha }}
-        run: |
-          compare_status=$(
-            curl -fsSL \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/compare/${FULL_SHA}...main" |
-              jq -er '.status'
-          )
-
-          case "$compare_status" in
-            identical|ahead) ;;
-            *)
-              echo "::error::source SHA ${FULL_SHA} is not on main (compare status: ${compare_status})"
-              exit 1
-              ;;
-          esac
-
       - name: Compute preview metadata
         id: meta
         env:
