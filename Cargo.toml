@@ -30,7 +30,7 @@ libc = "=0.2.189"
 nucleo-matcher = "=0.3.1"
 unicode-segmentation = "=1.13.3"
 jwalk = "=0.9.0"
-fff-search = { git = "https://github.com/dmtrKovalenko/fff.git", rev = "232288c60bc8bb2f25496e72d7b7c06725c2b283" }
+fff-search = { git = "https://github.com/dmtrKovalenko/fff.git", rev = "d01cc483ca67263e92c303c204d90764216376da" }
 rayon = "=1.12.0"
 dashmap = "=6.2.1"
 dirs = "=6.0.0"

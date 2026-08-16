@@ -774,7 +774,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 [[package]]
 name = "fff-grep"
 version = "0.10.4"
-source = "git+https://github.com/dmtrKovalenko/fff.git?rev=232288c60bc8bb2f25496e72d7b7c06725c2b283#232288c60bc8bb2f25496e72d7b7c06725c2b283"
+source = "git+https://github.com/dmtrKovalenko/fff.git?rev=d01cc483ca67263e92c303c204d90764216376da#d01cc483ca67263e92c303c204d90764216376da"
 dependencies = [
  "bstr",
  "memchr",
@@ -797,12 +797,12 @@ dependencies = [
 [[package]]
 name = "fff-query-parser"
 version = "0.10.4"
-source = "git+https://github.com/dmtrKovalenko/fff.git?rev=232288c60bc8bb2f25496e72d7b7c06725c2b283#232288c60bc8bb2f25496e72d7b7c06725c2b283"
+source = "git+https://github.com/dmtrKovalenko/fff.git?rev=d01cc483ca67263e92c303c204d90764216376da#d01cc483ca67263e92c303c204d90764216376da"
 
 [[package]]
 name = "fff-search"
 version = "0.10.4"
-source = "git+https://github.com/dmtrKovalenko/fff.git?rev=232288c60bc8bb2f25496e72d7b7c06725c2b283#232288c60bc8bb2f25496e72d7b7c06725c2b283"
+source = "git+https://github.com/dmtrKovalenko/fff.git?rev=d01cc483ca67263e92c303c204d90764216376da#d01cc483ca67263e92c303c204d90764216376da"
 dependencies = [
  "ahash",
  "aho-corasick",
