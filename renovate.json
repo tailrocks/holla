@@ -21,5 +21,12 @@
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["at any time"]
-  }
+  },
+  "packageRules": [
+    {
+      "description": "Velnor strict slots (capability manifest v9) accept only the reviewed setup-mold SHA 9c9c13bf; unreviewed digest bumps are rejected with capability_validation and break Velnor-lane builds. Bump only after fleet review lands.",
+      "matchPackageNames": ["rui314/setup-mold"],
+      "enabled": false
+    }
+  ]
 }
