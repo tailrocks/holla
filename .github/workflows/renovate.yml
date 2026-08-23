@@ -61,9 +61,7 @@ jobs:
         uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
         with:
           token: ${{ secrets.GH_RENOVATE_TOKEN }}
-          docker-volumes: |
-            /tmp:/tmp
-            ${{ github.workspace }}/.renovate:/renovate-cache
+          docker-volumes: /tmp:/tmp;${{ github.workspace }}/.renovate:/renovate-cache
         env:
           RENOVATE_REPOSITORIES: ${{ github.repository }}
           RENOVATE_ONBOARDING: false
