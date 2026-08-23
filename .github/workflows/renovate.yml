@@ -42,10 +42,14 @@ jobs:
             renovate-${{ runner.os }}-
 
       - name: Prepare shared Renovate data
-        # The action deliberately runs its container as an unprivileged user.
-        # The restored cache belongs to the host runner, while /tmp is bind
-        # mounted into the container. Make that shared boundary writable
-        # without coupling the workflow to either side's numeric UID.
+        # The action deliberately runs its container as an unprivileged user
+        # and mounts nothing but /tmp by default. Mount the workspace cache
+        # directory explicitly and point RENOVATE_BASE_DIR at it: on a stock
+        # GitHub-hosted lane the container cannot create /github/workspace
+        # (EACCES mkdir '/github'), while the Velnor daemon masked that by
+        # running the container privileged. The restored cache belongs to the
+        # host runner, so keep the shared boundary world-writable without
+        # coupling the workflow to either side's numeric UID.
         run: |
           install -d -m 0777 .renovate .renovate/cache .renovate/repos
           chmod -R a+rwX .renovate
@@ -57,11 +61,14 @@ jobs:
         uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
         with:
           token: ${{ secrets.GH_RENOVATE_TOKEN }}
+          docker-volumes: |
+            /tmp:/tmp
+            ${{ github.workspace }}/.renovate:/renovate-cache
         env:
           RENOVATE_REPOSITORIES: ${{ github.repository }}
           RENOVATE_ONBOARDING: false
           RENOVATE_REPOSITORY_CACHE: enabled
-          RENOVATE_BASE_DIR: /github/workspace/.renovate
+          RENOVATE_BASE_DIR: /renovate-cache
           # Pin the git author identity so the DCO sign-off trailer in
           # renovate.json::commitBody always matches the commit-author
           # email. DCO-2 requires the Signed-off-by email to equal the
