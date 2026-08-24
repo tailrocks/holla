@@ -24,6 +24,12 @@
   },
   "packageRules": [
     {
+      "description": "Lock file maintenance regenerates mise.lock without the idiomatic rust-toolchain.toml entry (rust via idiomatic_version_file_enable_tools), so CI fails with 'rust@1.98.0 is not in the lockfile'. mise.lock is maintained manually via `mise lock`. See PRs #155, #157, #159.",
+      "matchFileNames": ["mise.lock"],
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "enabled": false
+    },
+    {
       "description": "Velnor strict slots (capability manifest v9) accept only the reviewed setup-mold SHA 9c9c13bf; unreviewed digest bumps are rejected with capability_validation and break Velnor-lane builds. Bump only after fleet review lands.",
       "matchPackageNames": ["rui314/setup-mold"],
       "enabled": false
