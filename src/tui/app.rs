@@ -66,9 +66,22 @@ pub fn set_headless(enabled: bool) {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskEvent {
-    Line { task: usize, line: String },
-    Started { task: usize },
-    Done { task: usize, success: bool },
+    Line {
+        task: usize,
+        line: String,
+    },
+    Started {
+        task: usize,
+    },
+    /// Emitted when buffered output looks like a password prompt even though
+    /// no newline has arrived yet (sudo-style `printf` prompts).
+    Prompt {
+        task: usize,
+    },
+    Done {
+        task: usize,
+        success: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -341,7 +354,7 @@ async fn run_tasks_headless_inner(tasks: Vec<TaskDef>, parallel: bool, print: bo
             match event {
                 TaskEvent::Line { line, .. } if print => println!("{line}"),
                 TaskEvent::Done { task, success } => completed[task] = success,
-                TaskEvent::Started { .. } | TaskEvent::Line { .. } => {}
+                TaskEvent::Started { .. } | TaskEvent::Line { .. } | TaskEvent::Prompt { .. } => {}
             }
         }
         completed.into_iter().all(|done| done)
@@ -593,11 +606,24 @@ async fn run_task(
     *input_writer.lock().expect("task input lock") = Some(pty.writer);
     // The reader thread owns the master end and stops once the executor sets
     // the flag below — BSD masters do not reliably deliver EOF/EIO when the
-    // last slave closes, so termination is signaled explicitly.
+    // last slave closes, so termination is signaled explicitly. The loop
+    // always drains readable data before honoring the flag, and the executor
+    // joins the thread before reporting completion so no output is dropped
+    // for fast tasks.
     let reader_stopped = Arc::new(AtomicBool::new(false));
     let reader_tx = tx.clone();
     let thread_stopped = Arc::clone(&reader_stopped);
-    std::thread::spawn(move || stream_pty_output(task, pty.master, reader_tx, thread_stopped));
+    let reader_thread =
+        std::thread::spawn(move || stream_pty_output(task, pty.master, reader_tx, thread_stopped));
+    // Headless runs have no UI to forward keystrokes; bridge this process's
+    // own stdin into the pty so prompts stay answerable from the terminal,
+    // matching the pre-pty behavior of `holla run`.
+    let bridge_stopped = Arc::new(AtomicBool::new(false));
+    if HEADLESS.load(Ordering::Acquire) {
+        let bridge_sink = PtySink(Arc::clone(&input_writer));
+        let bridge_stop = Arc::clone(&bridge_stopped);
+        std::thread::spawn(move || bridge_tty_input(std::io::stdin(), bridge_sink, bridge_stop));
+    }
     let status = child.wait().await;
     if cancelled.load(Ordering::Acquire)
         && let Some(pgid) = registered_pgid
@@ -606,6 +632,8 @@ async fn run_task(
     }
     *input_writer.lock().expect("task input lock") = None;
     reader_stopped.store(true, Ordering::Release);
+    bridge_stopped.store(true, Ordering::Release);
+    let _ = reader_thread.join();
     process_groups.lock().expect("process group lock")[task] = None;
     let was_cancelled = cancelled.load(Ordering::Acquire);
     let success = !was_cancelled && status.as_ref().is_ok_and(|status| status.success());
@@ -625,8 +653,10 @@ async fn run_task(
 /// Reads raw pty master output and forwards it as line events. Uses a poll
 /// loop with a stop flag because master reads do not reliably observe slave
 /// closure on all platforms; the executor raises the flag after reaping.
-/// Carriage returns from tty-style progress updates are stripped; ANSI
-/// escapes are preserved for the renderer.
+/// Readable data is always drained before the flag is honored, so nothing is
+/// lost when a task finishes quickly. Carriage returns from tty-style
+/// progress updates are stripped; ANSI escapes are preserved for the
+/// renderer.
 fn stream_pty_output(
     task: usize,
     mut master: File,
@@ -637,6 +667,9 @@ fn stream_pty_output(
 
     let mut buffer = [0u8; 8192];
     let mut pending: Vec<u8> = Vec::new();
+    // Byte offset up to which a prompt has already been announced; reset on
+    // every line break so a reprompting child is announced again.
+    let mut announced_up_to = 0usize;
     let send_line = |pending: &mut Vec<u8>, tx: &mpsc::Sender<TaskEvent>| -> bool {
         while let Some(position) = pending.iter().position(|byte| *byte == b'\n') {
             let mut line: Vec<u8> = pending.drain(..=position).collect();
@@ -657,9 +690,6 @@ fn stream_pty_output(
         true
     };
     loop {
-        if stop.load(Ordering::Acquire) {
-            break;
-        }
         let mut fds = [libc::pollfd {
             fd: master.as_raw_fd(),
             events: libc::POLLIN,
@@ -674,22 +704,32 @@ fn stream_pty_output(
             }
             continue;
         }
-        if ready == 0 {
-            continue;
-        }
-        if fds[0].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
-            continue;
-        }
-        match master.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => {
-                pending.extend_from_slice(&buffer[..read]);
-                if !send_line(&mut pending, &tx) {
-                    return;
+        if ready > 0 && fds[0].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+            match master.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    pending.extend_from_slice(&buffer[..read]);
+                    announced_up_to = 0;
+                    if !send_line(&mut pending, &tx) {
+                        return;
+                    }
                 }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
             }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => break,
+            continue;
+        }
+        // Nothing readable right now: honor the stop flag only once drained,
+        // and surface sudo-style prompts that never end their line.
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        if pending.len() > announced_up_to && is_password_prompt(&String::from_utf8_lossy(&pending))
+        {
+            announced_up_to = pending.len();
+            if tx.send(TaskEvent::Prompt { task }).is_err() {
+                return;
+            }
         }
     }
     let _ = send_line(&mut pending, &tx);
@@ -698,6 +738,46 @@ fn stream_pty_output(
             task,
             line: String::from_utf8_lossy(&pending).into_owned(),
         });
+    }
+}
+
+/// Forwards bytes from `source` into the task pty until EOF or the stop flag
+/// is raised; used by headless runs so prompts remain answerable.
+fn bridge_tty_input(mut source: impl Read, mut sink: impl Write, stop: Arc<AtomicBool>) -> bool {
+    let mut buffer = [0u8; 256];
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return false;
+        }
+        match source.read(&mut buffer) {
+            Ok(0) | Err(_) => return true,
+            Ok(read) => {
+                if sink.write_all(&buffer[..read]).is_err() {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+/// Write adapter over the shared per-task pty writer that headless stdin
+/// bridging uses; writes fail cleanly once the executor clears the writer.
+struct PtySink(Arc<Mutex<Option<File>>>);
+
+impl Write for PtySink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut input = self.0.lock().expect("task input lock");
+        input
+            .as_mut()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?
+            .write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut input = self.0.lock().expect("task input lock");
+        input
+            .as_mut()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?
+            .flush()
     }
 }
 
@@ -765,6 +845,7 @@ fn apply_event(tasks: &mut [RunningTask], event: TaskEvent) {
             }
             tasks[task].lines.push(line);
         }
+        TaskEvent::Prompt { .. } => {}
         TaskEvent::Done { task, success } => tasks[task].state = TaskState::Done(success),
     }
 }
@@ -860,6 +941,12 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                     // The prompt was answered (or abandoned); a follow-up
                     // non-prompt line means the child moved on.
                     prompt_task = None;
+                }
+            }
+            if let TaskEvent::Prompt { task } = &event {
+                prompt_task = Some(*task);
+                if !matches!(tasks[*task].state, TaskState::Done(_)) {
+                    selected = *task;
                 }
             }
             if let TaskEvent::Done { task, .. } = &event {
@@ -1543,6 +1630,88 @@ mod tests {
             }
         }
         assert!(saw_prompt_answer, "child could not read /dev/tty");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fast_task_output_is_not_dropped() {
+        let (tx, rx) = mpsc::channel();
+        let _handles = spawn_tasks(
+            vec![TaskDef::new("quick", "sh", &["-c", "echo final"])],
+            false,
+            tx,
+        );
+
+        let events = collect_events(&rx, 1);
+
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, TaskEvent::Line { line, .. } if line == "final")),
+            "final output lost: {events:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn newline_less_password_prompt_is_surfaced() {
+        let (tx, rx) = mpsc::channel();
+        let handles = spawn_tasks(
+            vec![TaskDef::new(
+                "prompt",
+                "sh",
+                &[
+                    "-c",
+                    "printf 'Password:'; read -r x < /dev/tty; echo done:$x",
+                ],
+            )],
+            false,
+            tx,
+        );
+
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)),
+            Ok(TaskEvent::Started { task: 0 })
+        ));
+
+        // The prompt has no trailing newline, so only the Prompt event can
+        // announce it.
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("prompt event");
+
+        for _ in 0..100 {
+            if handles[0].send_input(b"pw\n") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(TaskEvent::Line { line, .. }) if line == "done:pw" => break,
+                Ok(TaskEvent::Done { success, .. }) => {
+                    assert!(success);
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => panic!("task event: {error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn stdin_bridge_forwards_until_eof_or_stop() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut sink: Vec<u8> = Vec::new();
+        assert!(bridge_tty_input(
+            std::io::Cursor::new(b"secret\n".to_vec()),
+            &mut sink,
+            Arc::clone(&stop)
+        ));
+        assert_eq!(sink, b"secret\n");
+
+        sink.clear();
+        stop.store(true, Ordering::Release);
+        let pending = std::io::Cursor::new(b"ignored".to_vec());
+        assert!(!bridge_tty_input(pending, &mut sink, stop));
+        assert!(sink.is_empty());
     }
 
     #[test]

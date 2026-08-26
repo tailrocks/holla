@@ -110,6 +110,21 @@ fn user_action_streams_plain_output() {
 }
 
 #[test]
+fn headless_action_answers_prompt_from_stdin() {
+    let directory = TempDir::new().unwrap();
+    write_global(
+        &directory,
+        "[[action]]\nid='test.prompt'\nlabel='Prompt'\ncommand=['sh','-c','read -r reply < /dev/tty && echo got:$reply']\ndanger='safe'\n",
+    );
+    command(&directory)
+        .args(["run", "test.prompt", "--yes"])
+        .write_stdin("token\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("got:token"));
+}
+
+#[test]
 fn doctor_reports_registry_and_config() {
     let directory = TempDir::new().unwrap();
     command(&directory)
