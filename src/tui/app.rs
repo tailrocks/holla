@@ -437,7 +437,7 @@ struct TaskPty {
 }
 
 fn open_task_pty() -> std::io::Result<TaskPty> {
-    let mut winsize = libc::winsize {
+    let winsize = libc::winsize {
         ws_row: PTY_ROWS,
         ws_col: PTY_COLS,
         ws_xpixel: 0,
@@ -447,14 +447,17 @@ fn open_task_pty() -> std::io::Result<TaskPty> {
     let mut slave: libc::c_int = -1;
     // SAFETY: openpty allocates a fresh pseudo-terminal pair into the two
     // caller-provided out-fds. The null termios keeps the platform default
-    // line discipline; only the initial window size is overridden.
+    // line discipline; only the initial window size is overridden. The size
+    // is passed as a raw pointer because the platform signatures disagree on
+    // constness (macOS takes *mut, Linux *const); the callee does not retain
+    // it, so a shared winsize binding is safe.
     if unsafe {
         libc::openpty(
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut winsize,
+            std::ptr::from_ref(&winsize).cast_mut(),
         )
     } != 0
     {
