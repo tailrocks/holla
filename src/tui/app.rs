@@ -667,8 +667,8 @@ fn stream_pty_output(
 
     let mut buffer = [0u8; 8192];
     let mut pending: Vec<u8> = Vec::new();
-    // Byte offset up to which a prompt has already been announced; reset on
-    // every line break so a reprompting child is announced again.
+    // Byte offset up to which a prompt has already been announced; reset
+    // whenever new bytes arrive so a reprompting child is announced again.
     let mut announced_up_to = 0usize;
     let send_line = |pending: &mut Vec<u8>, tx: &mpsc::Sender<TaskEvent>| -> bool {
         while let Some(position) = pending.iter().position(|byte| *byte == b'\n') {
