@@ -5,6 +5,9 @@ use ratatui::{
     text::{Line, Span, Text},
 };
 use std::{
+    fs::File,
+    io::{Read, Write},
+    os::unix::io::FromRawFd,
     path::PathBuf,
     process::Stdio,
     sync::{
@@ -26,10 +29,7 @@ use termrock::{
         StatusBarState, StatusSlot, Tab, Tabs, TabsState, Viewport, render_hint_bar,
     },
 };
-use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, BufReader},
-    process::Command,
-};
+use tokio::process::Command;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskState {
@@ -66,9 +66,22 @@ pub fn set_headless(enabled: bool) {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskEvent {
-    Line { task: usize, line: String },
-    Started { task: usize },
-    Done { task: usize, success: bool },
+    Line {
+        task: usize,
+        line: String,
+    },
+    Started {
+        task: usize,
+    },
+    /// Emitted when buffered output looks like a password prompt even though
+    /// no newline has arrived yet (sudo-style `printf` prompts).
+    Prompt {
+        task: usize,
+    },
+    Done {
+        task: usize,
+        success: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -76,9 +89,24 @@ struct TaskHandle {
     task: usize,
     process_groups: Arc<Mutex<Vec<Option<u32>>>>,
     cancelled: Arc<AtomicBool>,
+    /// Write end of the task's pseudo-terminal. `None` once the task has
+    /// finished and can no longer receive typed input.
+    input: Arc<Mutex<Option<File>>>,
 }
 
 impl TaskHandle {
+    fn accepts_input(&self) -> bool {
+        self.input.lock().expect("task input lock").is_some()
+    }
+
+    fn send_input(&self, bytes: &[u8]) -> bool {
+        let mut input = self.input.lock().expect("task input lock");
+        match input.as_mut() {
+            Some(pty) => pty.write_all(bytes).is_ok(),
+            None => false,
+        }
+    }
+
     fn cancel(&self) -> bool {
         self.cancelled.store(true, Ordering::Release);
         let pid = self.process_groups.lock().expect("process group lock")[self.task];
@@ -172,6 +200,7 @@ enum RunnerKey {
     PageUp,
     PageDown,
     FollowTail,
+    Interact,
     Quit,
 }
 
@@ -250,6 +279,13 @@ static RUNNER_BINDINGS: &[KeyBinding<RunnerKey>] = &[
         Some("end"),
     ),
     KeyBinding::borrowed(
+        &[KeyChord::plain(KeyCode::Char('i'))],
+        RunnerKey::Interact,
+        Some("type into task"),
+        Visibility::Shown,
+        Some("i"),
+    ),
+    KeyBinding::borrowed(
         &[
             KeyChord::plain(KeyCode::Char('q')),
             KeyChord::plain(KeyCode::Esc),
@@ -261,6 +297,15 @@ static RUNNER_BINDINGS: &[KeyBinding<RunnerKey>] = &[
     ),
 ];
 static RUNNER_KEYMAP: Keymap<RunnerKey> = Keymap::from_static(RUNNER_BINDINGS);
+
+static INPUT_BINDINGS: &[KeyBinding<RunnerKey>] = &[KeyBinding::borrowed(
+    &[KeyChord::plain(KeyCode::Esc)],
+    RunnerKey::Interact,
+    Some("back to controls"),
+    Visibility::Shown,
+    Some("esc"),
+)];
+static INPUT_KEYMAP: Keymap<RunnerKey> = Keymap::from_static(INPUT_BINDINGS);
 
 static DONE_BINDINGS: &[KeyBinding<RunnerKey>] = &[KeyBinding::borrowed(
     &[
@@ -309,7 +354,7 @@ async fn run_tasks_headless_inner(tasks: Vec<TaskDef>, parallel: bool, print: bo
             match event {
                 TaskEvent::Line { line, .. } if print => println!("{line}"),
                 TaskEvent::Done { task, success } => completed[task] = success,
-                TaskEvent::Started { .. } | TaskEvent::Line { .. } => {}
+                TaskEvent::Started { .. } | TaskEvent::Line { .. } | TaskEvent::Prompt { .. } => {}
             }
         }
         completed.into_iter().all(|done| done)
@@ -324,15 +369,18 @@ fn spawn_tasks(defs: Vec<TaskDef>, parallel: bool, tx: mpsc::Sender<TaskEvent>) 
     enable_child_subreaper();
     let process_groups = Arc::new(Mutex::new(vec![None; defs.len()]));
     let cancelled = Arc::new(AtomicBool::new(false));
-    let handles = (0..defs.len())
+    let handles: Vec<TaskHandle> = (0..defs.len())
         .map(|task| TaskHandle {
             task,
             process_groups: Arc::clone(&process_groups),
             cancelled: Arc::clone(&cancelled),
+            input: Arc::new(Mutex::new(None)),
         })
         .collect();
 
+    let executor_handles = handles.clone();
     tokio::spawn(async move {
+        let handles = executor_handles;
         if parallel {
             let mut jobs = Vec::with_capacity(defs.len());
             for (task, def) in defs.into_iter().enumerate() {
@@ -342,6 +390,7 @@ fn spawn_tasks(defs: Vec<TaskDef>, parallel: bool, tx: mpsc::Sender<TaskEvent>) 
                     tx.clone(),
                     Arc::clone(&process_groups),
                     Arc::clone(&cancelled),
+                    Arc::clone(&handles[task].input),
                 )));
             }
             drop(tx);
@@ -363,6 +412,7 @@ fn spawn_tasks(defs: Vec<TaskDef>, parallel: bool, tx: mpsc::Sender<TaskEvent>) 
                     tx.clone(),
                     Arc::clone(&process_groups),
                     Arc::clone(&cancelled),
+                    Arc::clone(&handles[task].input),
                 )
                 .await;
             }
@@ -372,12 +422,108 @@ fn spawn_tasks(defs: Vec<TaskDef>, parallel: bool, tx: mpsc::Sender<TaskEvent>) 
     handles
 }
 
+const PTY_ROWS: u16 = 24;
+const PTY_COLS: u16 = 80;
+
+struct TaskPty {
+    /// Master end, moved into the output reader thread.
+    master: File,
+    /// Second handle on the master end for forwarding typed keys.
+    writer: File,
+    /// Child-side stdio handles on the slave end.
+    stdin: File,
+    stdout: File,
+    stderr: File,
+}
+
+fn open_task_pty() -> std::io::Result<TaskPty> {
+    let winsize = libc::winsize {
+        ws_row: PTY_ROWS,
+        ws_col: PTY_COLS,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let mut master: libc::c_int = -1;
+    let mut slave: libc::c_int = -1;
+    // SAFETY: openpty allocates a fresh pseudo-terminal pair into the two
+    // caller-provided out-fds. The null termios keeps the platform default
+    // line discipline; only the initial window size is overridden. The size
+    // is passed as a raw pointer because the platform signatures disagree on
+    // constness (macOS takes *mut, Linux *const); the callee does not retain
+    // it, so a shared winsize binding is safe.
+    if unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::from_ref(&winsize).cast_mut(),
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    // From here every fd is owned by a `File`, so drops clean up on error.
+    // SAFETY: `master` and `slave` are freshly created fds from openpty that
+    // nothing else owns yet.
+    let master = unsafe { File::from_raw_fd(master) };
+    let stdin = unsafe { File::from_raw_fd(slave) };
+    let stdout = stdin.try_clone()?;
+    let stderr = stdin.try_clone()?;
+    let writer = master.try_clone()?;
+    Ok(TaskPty {
+        master,
+        writer,
+        stdin,
+        stdout,
+        stderr,
+    })
+}
+
+/// Maps a key pressed while input forwarding is active to the bytes the task
+/// should see on its tty. `None` means the key is ignored (navigation keys).
+fn key_to_input_bytes(key: termrock::input::KeyEvent) -> Option<Vec<u8>> {
+    match key.code {
+        KeyCode::Enter => Some(b"\r".to_vec()),
+        KeyCode::Backspace => Some(vec![0x7f]),
+        KeyCode::Tab => Some(b"\t".to_vec()),
+        KeyCode::Char(mut ch) => {
+            if key
+                .modifiers
+                .contains(termrock::input::KeyModifiers::CONTROL)
+            {
+                let upper = ch.to_ascii_uppercase();
+                if upper.is_ascii_uppercase() || upper == '@' {
+                    return Some(vec![upper as u8 & 0x1f]);
+                }
+                return None;
+            }
+            if key.modifiers.contains(termrock::input::KeyModifiers::SHIFT)
+                && ch.is_ascii_lowercase()
+            {
+                ch = ch.to_ascii_uppercase();
+            }
+            let mut buffer = [0u8; 4];
+            Some(ch.encode_utf8(&mut buffer).as_bytes().to_vec())
+        }
+        _ => None,
+    }
+}
+
+/// Recognizes interactive password prompts (sudo and friends) in task output
+/// so the runner can point the user at them.
+fn is_password_prompt(line: &str) -> bool {
+    let trimmed = line.trim_end();
+    trimmed.to_ascii_lowercase().contains("password") && trimmed.ends_with(':')
+}
+
 async fn run_task(
     task: usize,
     def: TaskDef,
     tx: mpsc::Sender<TaskEvent>,
     process_groups: Arc<Mutex<Vec<Option<u32>>>>,
     cancelled: Arc<AtomicBool>,
+    input_writer: Arc<Mutex<Option<File>>>,
 ) {
     if cancelled.load(Ordering::Acquire) {
         let _ = tx.send(TaskEvent::Done {
@@ -388,12 +534,44 @@ async fn run_task(
     }
     let _ = tx.send(TaskEvent::Started { task });
 
+    let pty = match open_task_pty() {
+        Ok(pty) => pty,
+        Err(error) => {
+            let _ = tx.send(TaskEvent::Line {
+                task,
+                line: format!("Error: could not create terminal: {error}"),
+            });
+            let _ = tx.send(TaskEvent::Done {
+                task,
+                success: false,
+            });
+            return;
+        }
+    };
+
     let mut command = Command::new(&def.program);
     command
         .args(&def.args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stdin(Stdio::from(pty.stdin))
+        .stdout(Stdio::from(pty.stdout))
+        .stderr(Stdio::from(pty.stderr));
+    // SAFETY: runs once in the forked child before exec. setsid detaches the
+    // child into its own session and process group (replacing the previous
+    // process_group(0), which must not run first because a child that is
+    // already a group leader cannot setsid) and TIOCSCTTY promotes the
+    // already-dup2'd pty slave on fd 0 to its controlling terminal, which
+    // sudo and other prompt-based tools require to read credentials.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ioctl(0, libc::TIOCSCTTY as libc::c_ulong, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     if let Some(directory) = &def.working_directory {
         command.current_dir(directory);
     }
@@ -408,6 +586,7 @@ async fn run_task(
                 task,
                 success: false,
             });
+            *input_writer.lock().expect("task input lock") = None;
             return;
         }
     };
@@ -421,31 +600,43 @@ async fn run_task(
                 task,
                 process_groups: Arc::clone(&process_groups),
                 cancelled: Arc::clone(&cancelled),
+                input: Arc::clone(&input_writer),
             }
             .cancel();
         }
     }
 
-    let stdout_reader = child
-        .stdout
-        .take()
-        .map(|stdout| tokio::spawn(stream_lines(task, stdout, tx.clone())));
-    let stderr_reader = child
-        .stderr
-        .take()
-        .map(|stderr| tokio::spawn(stream_lines(task, stderr, tx.clone())));
+    *input_writer.lock().expect("task input lock") = Some(pty.writer);
+    // The reader thread owns the master end and stops once the executor sets
+    // the flag below — BSD masters do not reliably deliver EOF/EIO when the
+    // last slave closes, so termination is signaled explicitly. The loop
+    // always drains readable data before honoring the flag, and the executor
+    // joins the thread before reporting completion so no output is dropped
+    // for fast tasks.
+    let reader_stopped = Arc::new(AtomicBool::new(false));
+    let reader_tx = tx.clone();
+    let thread_stopped = Arc::clone(&reader_stopped);
+    let reader_thread =
+        std::thread::spawn(move || stream_pty_output(task, pty.master, reader_tx, thread_stopped));
+    // Headless runs have no UI to forward keystrokes; bridge this process's
+    // own stdin into the pty so prompts stay answerable from the terminal,
+    // matching the pre-pty behavior of `holla run`.
+    let bridge_stopped = Arc::new(AtomicBool::new(false));
+    if HEADLESS.load(Ordering::Acquire) {
+        let bridge_sink = PtySink(Arc::clone(&input_writer));
+        let bridge_stop = Arc::clone(&bridge_stopped);
+        std::thread::spawn(move || bridge_tty_input(std::io::stdin(), bridge_sink, bridge_stop));
+    }
     let status = child.wait().await;
     if cancelled.load(Ordering::Acquire)
         && let Some(pgid) = registered_pgid
     {
         reap_process_group(pgid).await;
     }
-    if let Some(reader) = stdout_reader {
-        let _ = reader.await;
-    }
-    if let Some(reader) = stderr_reader {
-        let _ = reader.await;
-    }
+    *input_writer.lock().expect("task input lock") = None;
+    reader_stopped.store(true, Ordering::Release);
+    bridge_stopped.store(true, Ordering::Release);
+    let _ = reader_thread.join();
     process_groups.lock().expect("process group lock")[task] = None;
     let was_cancelled = cancelled.load(Ordering::Acquire);
     let success = !was_cancelled && status.as_ref().is_ok_and(|status| status.success());
@@ -460,6 +651,137 @@ async fn run_task(
         });
     }
     let _ = tx.send(TaskEvent::Done { task, success });
+}
+
+/// Reads raw pty master output and forwards it as line events. Uses a poll
+/// loop with a stop flag because master reads do not reliably observe slave
+/// closure on all platforms; the executor raises the flag after reaping.
+/// Readable data is always drained before the flag is honored, so nothing is
+/// lost when a task finishes quickly. Carriage returns from tty-style
+/// progress updates are stripped; ANSI escapes are preserved for the
+/// renderer.
+fn stream_pty_output(
+    task: usize,
+    mut master: File,
+    tx: mpsc::Sender<TaskEvent>,
+    stop: Arc<AtomicBool>,
+) {
+    use std::os::unix::io::AsRawFd;
+
+    let mut buffer = [0u8; 8192];
+    let mut pending: Vec<u8> = Vec::new();
+    // Byte offset up to which a prompt has already been announced; reset
+    // whenever new bytes arrive so a reprompting child is announced again.
+    let mut announced_up_to = 0usize;
+    let send_line = |pending: &mut Vec<u8>, tx: &mpsc::Sender<TaskEvent>| -> bool {
+        while let Some(position) = pending.iter().position(|byte| *byte == b'\n') {
+            let mut line: Vec<u8> = pending.drain(..=position).collect();
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            if tx
+                .send(TaskEvent::Line {
+                    task,
+                    line: String::from_utf8_lossy(&line).into_owned(),
+                })
+                .is_err()
+            {
+                return false;
+            }
+        }
+        true
+    };
+    loop {
+        let mut fds = [libc::pollfd {
+            fd: master.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        }];
+        // SAFETY: poll only waits on the pty master fd this thread owns.
+        let ready = unsafe { libc::poll(fds.as_mut_ptr(), 1, 50) };
+        if ready < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                break;
+            }
+            continue;
+        }
+        if ready > 0 && fds[0].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+            match master.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    pending.extend_from_slice(&buffer[..read]);
+                    announced_up_to = 0;
+                    if !send_line(&mut pending, &tx) {
+                        return;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+            continue;
+        }
+        // Nothing readable right now: honor the stop flag only once drained,
+        // and surface sudo-style prompts that never end their line.
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        if pending.len() > announced_up_to && is_password_prompt(&String::from_utf8_lossy(&pending))
+        {
+            announced_up_to = pending.len();
+            if tx.send(TaskEvent::Prompt { task }).is_err() {
+                return;
+            }
+        }
+    }
+    let _ = send_line(&mut pending, &tx);
+    if !pending.is_empty() {
+        let _ = tx.send(TaskEvent::Line {
+            task,
+            line: String::from_utf8_lossy(&pending).into_owned(),
+        });
+    }
+}
+
+/// Forwards bytes from `source` into the task pty until EOF or the stop flag
+/// is raised; used by headless runs so prompts remain answerable.
+fn bridge_tty_input(mut source: impl Read, mut sink: impl Write, stop: Arc<AtomicBool>) -> bool {
+    let mut buffer = [0u8; 256];
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return false;
+        }
+        match source.read(&mut buffer) {
+            Ok(0) | Err(_) => return true,
+            Ok(read) => {
+                if sink.write_all(&buffer[..read]).is_err() {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+/// Write adapter over the shared per-task pty writer that headless stdin
+/// bridging uses; writes fail cleanly once the executor clears the writer.
+struct PtySink(Arc<Mutex<Option<File>>>);
+
+impl Write for PtySink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut input = self.0.lock().expect("task input lock");
+        input
+            .as_mut()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?
+            .write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut input = self.0.lock().expect("task input lock");
+        input
+            .as_mut()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?
+            .flush()
+    }
 }
 
 async fn reap_process_group(pgid: i32) {
@@ -517,27 +839,6 @@ fn process_group_exists(pgid: i32) -> bool {
     result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-async fn stream_lines(task: usize, stream: impl AsyncRead + Unpin, tx: mpsc::Sender<TaskEvent>) {
-    let mut lines = BufReader::new(stream).lines();
-    loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
-                if tx.send(TaskEvent::Line { task, line }).is_err() {
-                    break;
-                }
-            }
-            Ok(None) => break,
-            Err(error) => {
-                let _ = tx.send(TaskEvent::Line {
-                    task,
-                    line: format!("Error reading output: {error}"),
-                });
-                break;
-            }
-        }
-    }
-}
-
 fn apply_event(tasks: &mut [RunningTask], event: TaskEvent) {
     match event {
         TaskEvent::Started { task } => tasks[task].state = TaskState::Running,
@@ -547,6 +848,7 @@ fn apply_event(tasks: &mut [RunningTask], event: TaskEvent) {
             }
             tasks[task].lines.push(line);
         }
+        TaskEvent::Prompt { .. } => {}
         TaskEvent::Done { task, success } => tasks[task].state = TaskState::Done(success),
     }
 }
@@ -602,6 +904,11 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
     tabs_state.focused = true;
     let mut status_state = StatusBarState::default();
     let mut cancel_dialog: Option<ChoiceDialogState<CancelChoice>> = None;
+    // Task currently receiving typed keys; `Some` disables runner shortcuts
+    // so passwords and prompts reach the child untouched.
+    let mut input_target: Option<usize> = None;
+    // Task whose output last looked like a password prompt.
+    let mut prompt_task: Option<usize> = None;
     let cancel_actions = [
         DialogAction {
             id: CancelChoice::Stop,
@@ -627,6 +934,32 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
 
     loop {
         while let Ok(event) = events.try_recv() {
+            if let TaskEvent::Line { task, line } = &event {
+                if is_password_prompt(line) {
+                    prompt_task = Some(*task);
+                    if !matches!(tasks[*task].state, TaskState::Done(_)) {
+                        selected = *task;
+                    }
+                } else if prompt_task == Some(*task) {
+                    // The prompt was answered (or abandoned); a follow-up
+                    // non-prompt line means the child moved on.
+                    prompt_task = None;
+                }
+            }
+            if let TaskEvent::Prompt { task } = &event {
+                prompt_task = Some(*task);
+                if !matches!(tasks[*task].state, TaskState::Done(_)) {
+                    selected = *task;
+                }
+            }
+            if let TaskEvent::Done { task, .. } = &event {
+                if input_target == Some(*task) {
+                    input_target = None;
+                }
+                if prompt_task == Some(*task) {
+                    prompt_task = None;
+                }
+            }
             apply_event(&mut tasks, event);
         }
         let done = all_done(&tasks);
@@ -654,11 +987,26 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 .iter()
                 .filter(|task| task.state == TaskState::Done(false))
                 .count();
-            let counts = if done {
+            let mut counts = if done {
                 format!("done — {ok} ok, {failed} failed — press q to close ")
             } else {
                 format!("{running} running, {ok} ok, {failed} failed ")
             };
+            if let Some(target) = input_target {
+                counts.push_str("⌨ typing → ");
+                counts.push_str(&tasks[target].label);
+                counts.push_str(" (esc ends) ");
+            } else if let Some(task) = prompt_task
+                && matches!(
+                    tasks[task].state,
+                    TaskState::Running | TaskState::Cancelling
+                )
+            {
+                counts.push_str(&format!(
+                    "⌨ password prompt — press i: {}",
+                    tasks[task].label
+                ));
+            }
             let left_slots = [StatusSlot {
                 id: StatusSlotId::Product,
                 content: " holla tasks ",
@@ -745,7 +1093,9 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 &mut viewport_state,
             );
 
-            let hints = if done {
+            let hints = if input_target.is_some() {
+                INPUT_KEYMAP.hint_spans()
+            } else if done {
                 DONE_KEYMAP.hint_spans()
             } else {
                 RUNNER_KEYMAP.hint_spans()
@@ -780,6 +1130,18 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                 continue;
             }
             let key = termrock::input::KeyEvent::from(key);
+            if input_target.is_some() {
+                // Input forwarding: every keystroke belongs to the task, so
+                // runner shortcuts are suspended. Esc is the only exit.
+                if key.code == KeyCode::Esc {
+                    input_target = None;
+                } else if let Some(target) = input_target
+                    && let Some(bytes) = key_to_input_bytes(key)
+                {
+                    let _ = supervisor.handles[target].send_input(&bytes);
+                }
+                continue;
+            }
             if let Some(dialog_state) = cancel_dialog.as_mut() {
                 match dialog_state.handle_key(&cancel_actions, key) {
                     Outcome::Activated(CancelChoice::Stop) => {
@@ -826,6 +1188,14 @@ async fn run_tui(task_defs: Vec<TaskDef>, parallel: bool) -> anyhow::Result<()> 
                     );
                 }
                 RunnerKey::FollowTail => tasks[selected].tail = TailScroll::default(),
+                RunnerKey::Interact => {
+                    let handle = &supervisor.handles[selected];
+                    input_target = if !done && handle.accepts_input() {
+                        Some(selected)
+                    } else {
+                        None
+                    };
+                }
                 RunnerKey::Quit if done => break,
                 RunnerKey::Quit => {
                     cancel_dialog = Some(ChoiceDialogState::new(Some(CancelChoice::Stop)));
@@ -977,6 +1347,7 @@ mod tests {
             task: 0,
             process_groups,
             cancelled,
+            input: Arc::new(Mutex::new(None)),
         }];
         let mut tasks = vec![RunningTask {
             label: "test".into(),
@@ -1164,5 +1535,245 @@ mod tests {
             events.last(),
             Some(TaskEvent::Done { success: false, .. })
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn typed_input_reaches_the_task_and_output_streams_back() {
+        let (tx, rx) = mpsc::channel();
+        let handles = spawn_tasks(
+            vec![TaskDef::new(
+                "echo",
+                "sh",
+                &["-c", "read -r line; echo got:$line"],
+            )],
+            false,
+            tx,
+        );
+
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)),
+            Ok(TaskEvent::Started { task: 0 })
+        ));
+
+        // The pty writer is registered shortly after spawn; wait for it.
+        let mut sent = false;
+        for _ in 0..100 {
+            if handles[0].send_input(b"hello\n") {
+                sent = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(sent, "task never accepted input");
+
+        let mut saw_echo = false;
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(TaskEvent::Line { line, .. }) if line == "got:hello" => saw_echo = true,
+                Ok(TaskEvent::Done { success, .. }) => {
+                    assert!(success);
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => panic!("task event: {error} (saw echo: {saw_echo})"),
+            }
+        }
+        assert!(saw_echo);
+
+        // Finished tasks stop accepting input.
+        assert!(!handles[0].accepts_input());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn task_can_read_from_its_controlling_terminal_like_sudo() {
+        let (tx, rx) = mpsc::channel();
+        let handles = spawn_tasks(
+            vec![TaskDef::new(
+                "prompt",
+                "sh",
+                &[
+                    "-c",
+                    "echo ready; read -r line < /dev/tty && echo got:$line",
+                ],
+            )],
+            false,
+            tx,
+        );
+
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(TaskEvent::Line { line, .. }) if line == "ready" => break,
+                Ok(_) => {}
+                Err(error) => panic!("readiness event: {error}"),
+            }
+        }
+
+        let mut sent = false;
+        for _ in 0..100 {
+            if handles[0].send_input(b"hunter2\n") {
+                sent = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(sent, "task never accepted input");
+
+        let mut saw_prompt_answer = false;
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(TaskEvent::Line { line, .. }) if line == "got:hunter2" => {
+                    saw_prompt_answer = true;
+                }
+                Ok(TaskEvent::Done { success, .. }) => {
+                    assert!(success);
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => panic!("task event: {error} (answered: {saw_prompt_answer})"),
+            }
+        }
+        assert!(saw_prompt_answer, "child could not read /dev/tty");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fast_task_output_is_not_dropped() {
+        let (tx, rx) = mpsc::channel();
+        let _handles = spawn_tasks(
+            vec![TaskDef::new("quick", "sh", &["-c", "echo final"])],
+            false,
+            tx,
+        );
+
+        let events = collect_events(&rx, 1);
+
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, TaskEvent::Line { line, .. } if line == "final")),
+            "final output lost: {events:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn newline_less_password_prompt_is_surfaced() {
+        let (tx, rx) = mpsc::channel();
+        let handles = spawn_tasks(
+            vec![TaskDef::new(
+                "prompt",
+                "sh",
+                &[
+                    "-c",
+                    "printf 'Password:'; read -r x < /dev/tty; echo done:$x",
+                ],
+            )],
+            false,
+            tx,
+        );
+
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)),
+            Ok(TaskEvent::Started { task: 0 })
+        ));
+
+        // The prompt has no trailing newline, so only the Prompt event can
+        // announce it.
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("prompt event");
+
+        for _ in 0..100 {
+            if handles[0].send_input(b"pw\n") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(TaskEvent::Line { line, .. }) if line == "done:pw" => break,
+                Ok(TaskEvent::Done { success, .. }) => {
+                    assert!(success);
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => panic!("task event: {error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn stdin_bridge_forwards_until_eof_or_stop() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut sink: Vec<u8> = Vec::new();
+        assert!(bridge_tty_input(
+            std::io::Cursor::new(b"secret\n".to_vec()),
+            &mut sink,
+            Arc::clone(&stop)
+        ));
+        assert_eq!(sink, b"secret\n");
+
+        sink.clear();
+        stop.store(true, Ordering::Release);
+        let pending = std::io::Cursor::new(b"ignored".to_vec());
+        assert!(!bridge_tty_input(pending, &mut sink, stop));
+        assert!(sink.is_empty());
+    }
+
+    #[test]
+    fn key_mapping_covers_password_typing() {
+        use termrock::input::KeyModifiers;
+
+        let plain = |ch: char| termrock::input::KeyEvent {
+            kind: termrock::input::KeyEventKind::Press,
+            code: KeyCode::Char(ch),
+            modifiers: KeyModifiers::NONE,
+            state: termrock::input::KeyEventState::NONE,
+        };
+        let with = |code, modifiers| termrock::input::KeyEvent {
+            kind: termrock::input::KeyEventKind::Press,
+            code,
+            modifiers,
+            state: termrock::input::KeyEventState::NONE,
+        };
+
+        // Letters that collide with runner shortcuts must forward verbatim.
+        assert_eq!(
+            key_to_input_bytes(plain('q')).as_deref(),
+            Some(b"q".as_slice())
+        );
+        assert_eq!(
+            key_to_input_bytes(with(KeyCode::Char('i'), KeyModifiers::CONTROL)).as_deref(),
+            Some([0x09].as_slice())
+        );
+        assert_eq!(
+            key_to_input_bytes(plain('é')).as_deref(),
+            Some("é".as_bytes())
+        );
+        assert_eq!(
+            key_to_input_bytes(with(KeyCode::Enter, KeyModifiers::NONE)).as_deref(),
+            Some(b"\r".as_slice())
+        );
+        assert_eq!(
+            key_to_input_bytes(with(KeyCode::Backspace, KeyModifiers::NONE)).as_deref(),
+            Some([0x7f].as_slice())
+        );
+        assert_eq!(
+            key_to_input_bytes(with(KeyCode::Char('c'), KeyModifiers::CONTROL)).as_deref(),
+            Some([0x03].as_slice())
+        );
+        assert_eq!(
+            key_to_input_bytes(with(KeyCode::Char('c'), KeyModifiers::SHIFT)).as_deref(),
+            Some(b"C".as_slice())
+        );
+        assert!(key_to_input_bytes(with(KeyCode::Left, KeyModifiers::NONE)).is_none());
+    }
+
+    #[test]
+    fn password_prompts_are_recognized() {
+        assert!(is_password_prompt("Password:"));
+        assert!(is_password_prompt("[sudo] Password for don:"));
+        assert!(is_password_prompt("password: "));
+        assert!(!is_password_prompt(
+            "==> Pouring gogcli--0.38.1.bottle.tar.gz"
+        ));
+        assert!(!is_password_prompt(""));
     }
 }

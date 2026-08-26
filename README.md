@@ -97,6 +97,14 @@ holla doctor
 `list --json` emits a versioned `{"v":1,"actions":[...]}` envelope. Headless
 destructive or explicitly confirmed actions require `--yes`.
 
+### Interactive prompts in the task runner
+
+Tasks that ask for input — a `sudo` password during `brew upgrade`, a
+confirmation prompt — can be answered without leaving holla: press `i` while a
+task is running and your keystrokes go to the focused task's own terminal;
+press `esc` to return to the runner controls. When output looks like a
+password prompt, holla jumps to that task and flags it in the status bar.
+
 ### Custom actions
 
 Put global actions in `~/.config/holla/actions.toml`, or project actions in
