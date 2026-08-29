@@ -231,7 +231,7 @@ jobs:
   sign-arm64-macos:
     needs: package-record
     permissions: {attestations: write, contents: read, id-token: write}
-    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@84a3d2c5f8f74a3054259ac494581b244bf61ee7 # 2026.8.31
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@c222e52030fee9ea6eae573a5769770be01d8438 # 2026.8.32
     with:
       artifact-name: package-subjects
       subject-path: holla-${{ needs.package-record.outputs.version }}-aarch64-apple-darwin.tar.gz
@@ -240,7 +240,7 @@ jobs:
   sign-x86-macos:
     needs: package-record
     permissions: {attestations: write, contents: read, id-token: write}
-    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@84a3d2c5f8f74a3054259ac494581b244bf61ee7 # 2026.8.31
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@c222e52030fee9ea6eae573a5769770be01d8438 # 2026.8.32
     with:
       artifact-name: package-subjects
       subject-path: holla-${{ needs.package-record.outputs.version }}-x86_64-apple-darwin.tar.gz
@@ -249,7 +249,7 @@ jobs:
   sign-arm64-linux:
     needs: package-record
     permissions: {attestations: write, contents: read, id-token: write}
-    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@84a3d2c5f8f74a3054259ac494581b244bf61ee7 # 2026.8.31
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@c222e52030fee9ea6eae573a5769770be01d8438 # 2026.8.32
     with:
       artifact-name: package-subjects
       subject-path: holla-${{ needs.package-record.outputs.version }}-aarch64-unknown-linux-gnu.tar.gz
@@ -258,7 +258,7 @@ jobs:
   sign-x86-linux:
     needs: package-record
     permissions: {attestations: write, contents: read, id-token: write}
-    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@84a3d2c5f8f74a3054259ac494581b244bf61ee7 # 2026.8.31
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@c222e52030fee9ea6eae573a5769770be01d8438 # 2026.8.32
     with:
       artifact-name: package-subjects
       subject-path: holla-${{ needs.package-record.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
@@ -267,7 +267,7 @@ jobs:
   sign-arm64-deb:
     needs: package-record
     permissions: {attestations: write, contents: read, id-token: write}
-    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@84a3d2c5f8f74a3054259ac494581b244bf61ee7 # 2026.8.31
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@c222e52030fee9ea6eae573a5769770be01d8438 # 2026.8.32
     with:
       artifact-name: package-subjects
       subject-path: holla-${{ needs.package-record.outputs.version }}-aarch64-unknown-linux-gnu.deb
@@ -276,7 +276,7 @@ jobs:
   sign-x86-deb:
     needs: package-record
     permissions: {attestations: write, contents: read, id-token: write}
-    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@84a3d2c5f8f74a3054259ac494581b244bf61ee7 # 2026.8.31
+    uses: tailrocks/velnor-actions/.github/workflows/package-signer.yml@c222e52030fee9ea6eae573a5769770be01d8438 # 2026.8.32
     with:
       artifact-name: package-subjects
       subject-path: holla-${{ needs.package-record.outputs.version }}-x86_64-unknown-linux-gnu.deb
