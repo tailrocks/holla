@@ -165,7 +165,7 @@ jobs:
       - tailrocks
       - ChainArgos
     if: ${{ always() }}
-    runs-on: ${{ ((github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') || github.event_name == 'push') && 'ubuntu-26.04' || fromJSON('["self-hosted","velnor-target-mvp"]') }}
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
