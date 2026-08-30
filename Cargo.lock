@@ -1704,9 +1704,9 @@ checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
 
 [[package]]
 name = "notify"
-version = "9.0.0-rc.4"
+version = "9.0.0-rc.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b44b771d4dd781ef14c84078693e67495da6b47f609f72e8a4da8420a861240e"
+checksum = "7768eb7201a1964d8eb10224e850df046ab584ee3c3d26e340a993d81f748148"
 dependencies = [
  "bitflags 2.13.1",
  "inotify",
@@ -2674,7 +2674,7 @@ dependencies = [
 [[package]]
 name = "termrock"
 version = "0.11.0"
-source = "git+https://github.com/tailrocks/termrock.git?branch=main#5a56bd778d087d3d90d90f4b8d66cdd5287c9a9a"
+source = "git+https://github.com/tailrocks/termrock.git?branch=main#35dddcf49bb2b3ef6d08776c337788df20ec2a33"
 dependencies = [
  "anstyle-parse",
  "base64 0.23.1",
