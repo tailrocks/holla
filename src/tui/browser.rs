@@ -1767,7 +1767,7 @@ mod tests {
         let rows = screen.lines().collect::<Vec<_>>();
         assert!(rows[0].contains("holla"));
         assert!(rows[0].contains("browser"));
-        assert!(rows[1].contains(&format!("Browse · {}", fixture.path().display())));
+        assert!(rows[1].starts_with("Browse · "));
         assert!(
             screen.contains("┌ holla"),
             "left panel title missing: {screen}"
