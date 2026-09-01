@@ -1,10 +1,11 @@
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyEventKind};
+use futures::StreamExt;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Layout},
     text::{Line, Span, Text},
 };
-use std::{collections::HashSet, sync::mpsc, time::Duration};
+use std::{collections::HashSet, sync::mpsc};
 use termrock::{
     input::KeyCode,
     interaction::Outcome,
@@ -26,6 +27,8 @@ use crate::{
     providers::{self, ScanEvent},
     search::{SearchHit, search_with_history},
 };
+
+const CURRENT_FOLDER_GROUP_ID: &str = "current-folder";
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum ActionId {
@@ -106,6 +109,7 @@ enum MenuKey {
     Run,
     Preview,
     Quit,
+    ModeToggle,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -115,7 +119,7 @@ enum HeaderSlot {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum ConfirmChoice {
+pub(crate) enum ConfirmChoice {
     Cancel,
     Run,
 }
@@ -156,6 +160,13 @@ static MENU_BINDINGS: &[KeyBinding<MenuKey>] = &[
         Some("clear/quit"),
         Visibility::Shown,
         Some("esc"),
+    ),
+    KeyBinding::borrowed(
+        &[KeyChord::ctrl(KeyCode::Char('o'))],
+        MenuKey::ModeToggle,
+        Some("browser"),
+        Visibility::Shown,
+        Some("ctrl-o"),
     ),
 ];
 static MENU_KEYMAP: Keymap<MenuKey> = Keymap::from_static(MENU_BINDINGS);
@@ -239,7 +250,7 @@ fn menu_rows_with_history(
             }));
         }
         let mut previous_group = None;
-        for group in &menu.groups {
+        for group in empty_query_groups(menu) {
             if previous_group != Some(group.id.as_str()) {
                 rows.push(ListRow {
                     id: ActionId::Separator(group.id.to_owned()),
@@ -305,6 +316,17 @@ fn menu_rows_with_history(
             }
         })
         .collect()
+}
+
+fn empty_query_groups(menu: &Menu) -> impl Iterator<Item = &GroupSpec> {
+    menu.groups
+        .iter()
+        .filter(|group| group.id == CURRENT_FOLDER_GROUP_ID)
+        .chain(
+            menu.groups
+                .iter()
+                .filter(|group| group.id != CURRENT_FOLDER_GROUP_ID),
+        )
 }
 
 fn highlighted_hit(group: &GroupSpec, hit: &SearchHit, theme: &Theme) -> Line<'static> {
@@ -415,97 +437,90 @@ fn needs_confirmation(action: &ActionSpec) -> bool {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    let theme = Theme::phosphor();
-    let tokens = theme.clone().density(Density::default());
-    let mut menu = Menu::default();
-    let mut scans: Option<mpsc::Receiver<ScanEvent>> = None;
-    let mut scanning = true;
-    let mut search_state = TextInputState::new("").with_allow_empty(true);
-    let mut list_state = ListState::new(None::<ActionId>);
-    let mut preview_scroll = DialogScroll::new();
-    let mut preview_focused = false;
-    let mut status_state = StatusBarState::default();
-    let mut pending_confirm: Option<PendingConfirm> = None;
-    let mut history = FrecencyStore::default();
-    let (history_sender, history_receiver) = mpsc::sync_channel(1);
-    let mut history_sender = Some(history_sender);
-    let mut history_loaded = false;
-    let cwd = std::env::current_dir()
-        .map(|path| path.display().to_string())
-        .unwrap_or_default();
-    let confirm_actions = [
-        DialogAction {
-            id: ConfirmChoice::Cancel,
-            label: "Cancel",
-            enabled: true,
-            style: None,
-        },
-        DialogAction {
-            id: ConfirmChoice::Run,
-            label: "Run",
-            enabled: true,
-            style: Some(theme.style(Role::Danger)),
-        },
-    ];
+    crate::tui::session::run().await
+}
 
-    let mut session = termrock::crossterm::Session::enter(
-        std::io::stdout(),
-        termrock::crossterm::SessionOptions::default(),
-    )?;
-    let backend = CrosstermBackend::new(session.writer_mut());
-    let mut terminal = ratatui::Terminal::new(backend)?;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LauncherOutcome {
+    Stay,
+    Quit,
+    Run,
+}
 
-    let selected_action = loop {
-        if !history_loaded {
-            match history_receiver.try_recv() {
-                Ok(loaded) => {
-                    history = loaded;
-                    history_loaded = true;
-                }
-                Err(mpsc::TryRecvError::Disconnected) => history_loaded = true,
-                Err(mpsc::TryRecvError::Empty) => {}
-            }
+pub(crate) struct LauncherState {
+    search_state: TextInputState,
+    list_state: ListState<ActionId>,
+    preview_scroll: DialogScroll,
+    preview_focused: bool,
+    status_state: StatusBarState<HeaderSlot>,
+    pending_confirm: Option<PendingConfirm>,
+    rows: Vec<ListRow<'static, ActionId>>,
+    preview: Vec<Line<'static>>,
+    preview_width: usize,
+    preview_viewport: (usize, usize),
+}
+
+pub(crate) struct LauncherRenderContext<'a> {
+    pub(crate) menu: &'a Menu,
+    pub(crate) scanning: bool,
+    pub(crate) cwd: &'a str,
+    pub(crate) history: &'a FrecencyStore,
+    pub(crate) theme: &'a Theme,
+    pub(crate) tokens: &'a Theme,
+    pub(crate) confirm_actions: &'a [DialogAction<'static, ConfirmChoice>; 2],
+}
+
+impl LauncherState {
+    pub(crate) fn new() -> Self {
+        Self {
+            search_state: TextInputState::new("").with_allow_empty(true),
+            list_state: ListState::new(None),
+            preview_scroll: DialogScroll::new(),
+            preview_focused: false,
+            status_state: StatusBarState::default(),
+            pending_confirm: None,
+            rows: Vec::new(),
+            preview: Vec::new(),
+            preview_width: 0,
+            preview_viewport: (0, 0),
         }
-        if let Some(scans) = scans.as_mut() {
-            loop {
-                match scans.try_recv() {
-                    Ok(ScanEvent::Group {
-                        provider_index,
-                        provider_id,
-                        group,
-                    }) => menu.insert_scanned_group(provider_index, provider_id, group),
-                    Ok(ScanEvent::Warning(warning)) => {
-                        menu.warnings.push(warning);
-                    }
-                    Ok(ScanEvent::Finished) | Err(mpsc::TryRecvError::Disconnected) => {
-                        scanning = false;
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                }
-            }
-        }
+    }
 
-        let rows = menu_rows_with_history(
-            &menu,
-            search_state.value(),
-            &theme,
-            &history,
+    pub(crate) fn render(
+        &mut self,
+        terminal: &mut ratatui::Terminal<CrosstermBackend<&mut std::io::Stdout>>,
+        context: LauncherRenderContext<'_>,
+    ) -> anyhow::Result<()> {
+        let LauncherRenderContext {
+            menu,
+            scanning,
+            cwd,
+            history,
+            theme,
+            tokens,
+            confirm_actions,
+        } = context;
+        self.rows = menu_rows_with_history(
+            menu,
+            self.search_state.value(),
+            theme,
+            history,
             now_epoch_secs(),
         );
-        if !rows
+        if !self
+            .rows
             .iter()
-            .any(|row| row.enabled && list_state.selected().is_some_and(|id| id == &row.id))
+            .any(|row| row.enabled && self.list_state.selected().is_some_and(|id| id == &row.id))
         {
-            list_state.select(
-                rows.iter()
+            self.list_state.select(
+                self.rows
+                    .iter()
                     .find(|row| row.enabled)
                     .map(|row| row.id.clone()),
             );
         }
-        let preview = preview_lines(&menu, list_state.selected(), &theme);
-        let preview_width = max_line_width(&preview);
-        let mut preview_viewport = (0usize, 0usize);
+        self.preview = preview_lines(menu, self.list_state.selected(), theme);
+        self.preview_width = max_line_width(&self.preview);
 
         terminal.draw(|frame| {
             let [header_area, search_area, body_area, footer_area] = Layout::vertical([
@@ -525,7 +540,7 @@ pub async fn run() -> anyhow::Result<()> {
                     format!("scanning… · {cwd}")
                 }
             } else {
-                cwd.clone()
+                cwd.to_owned()
             };
             let left_slots = [StatusSlot {
                 id: HeaderSlot::Product,
@@ -554,55 +569,56 @@ pub async fn run() -> anyhow::Result<()> {
                 hover_style: None,
             }];
             frame.render_stateful_widget(
-                &StatusBar::new(&left_slots, &right_slots, &theme).alpha(1.0),
+                &StatusBar::new(&left_slots, &right_slots, theme).alpha(1.0),
                 header_area,
-                &mut status_state,
+                &mut self.status_state,
             );
             frame.render_stateful_widget(
-                &TextInput::new("Search", &theme)
+                &TextInput::new("Search", theme)
                     .placeholder("Search actions…")
                     .validation(Validation::Valid),
                 search_area,
-                &mut search_state,
+                &mut self.search_state,
             );
 
-            let list_panel = Panel::new(&tokens)
-                .title(" holla ")
-                .emphasis(if preview_focused {
-                    PanelChrome::Normal
-                } else {
-                    PanelChrome::Focused
-                });
+            let list_panel =
+                Panel::new(tokens)
+                    .title(" holla ")
+                    .emphasis(if self.preview_focused {
+                        PanelChrome::Normal
+                    } else {
+                        PanelChrome::Focused
+                    });
             let list_inner = list_panel.inner(list_area);
             frame.render_widget(&list_panel, list_area);
             frame.render_stateful_widget(
-                &List::new(&rows, &tokens).focused(!preview_focused),
+                &List::new(&self.rows, tokens).focused(!self.preview_focused),
                 list_inner,
-                &mut list_state,
+                &mut self.list_state,
             );
 
-            preview_viewport = (
+            self.preview_viewport = (
                 usize::from(preview_area.height.saturating_sub(2)),
                 usize::from(preview_area.width.saturating_sub(2)),
             );
             frame.render_stateful_widget(
-                &Viewport::new(&preview, &theme)
+                &Viewport::new(&self.preview, theme)
                     .title("Preview")
-                    .emphasis(if preview_focused {
+                    .emphasis(if self.preview_focused {
                         PanelChrome::Focused
                     } else {
                         PanelChrome::Normal
                     })
                     .content_style(theme.style(Role::Text)),
                 preview_area,
-                &mut preview_scroll,
+                &mut self.preview_scroll,
             );
-            render_hint_bar(frame, footer_area, &MENU_KEYMAP.hint_spans(), &theme);
+            render_hint_bar(frame, footer_area, &MENU_KEYMAP.hint_spans(), theme);
             if let Some(warning) = menu.warnings.last() {
-                frame.render_widget(Toast::new(&theme, warning, Severity::Warning), frame.area());
+                frame.render_widget(Toast::new(theme, warning, Severity::Warning), frame.area());
             }
 
-            if let Some(pending) = pending_confirm.as_mut()
+            if let Some(pending) = self.pending_confirm.as_mut()
                 && let Some(action) = menu.action(&pending.action_id)
             {
                 let mut body = vec![
@@ -636,10 +652,10 @@ pub async fn run() -> anyhow::Result<()> {
                 }
                 frame.render_stateful_widget(
                     &ChoiceDialog::new(
-                        Dialog::new("Confirm action", Text::from(body), &theme)
+                        Dialog::new("Confirm action", Text::from(body), theme)
                             .style(theme.style(Role::Text))
                             .emphasis(PanelChrome::Focused),
-                        &confirm_actions,
+                        confirm_actions,
                     )
                     .gap("  "),
                     area,
@@ -647,6 +663,208 @@ pub async fn run() -> anyhow::Result<()> {
                 );
             }
         })?;
+        Ok(())
+    }
+
+    pub(crate) fn handle_key(
+        &mut self,
+        key: termrock::input::KeyEvent,
+        menu: &Menu,
+        confirm_actions: &[DialogAction<'static, ConfirmChoice>; 2],
+    ) -> LauncherOutcome {
+        if let Some(pending) = self.pending_confirm.as_mut() {
+            match pending.state.handle_key(confirm_actions, key) {
+                Outcome::Activated(ConfirmChoice::Run) => return LauncherOutcome::Run,
+                Outcome::Activated(ConfirmChoice::Cancel) | Outcome::Cancelled => {
+                    self.pending_confirm = None;
+                }
+                Outcome::Ignored | Outcome::Changed => {}
+                _ => {}
+            }
+            return LauncherOutcome::Stay;
+        }
+
+        if key.code == termrock::input::KeyCode::Esc {
+            if self.search_state.value().is_empty() {
+                return LauncherOutcome::Quit;
+            }
+            self.search_state = TextInputState::new("").with_allow_empty(true);
+            self.list_state.select(None);
+            return LauncherOutcome::Stay;
+        }
+
+        if matches!(
+            key.code,
+            termrock::input::KeyCode::Char(_)
+                | termrock::input::KeyCode::Backspace
+                | termrock::input::KeyCode::Delete
+        ) {
+            if self.search_state.handle_key(key) == TextInputOutcome::Changed {
+                self.list_state.select(None);
+                self.preview_scroll = DialogScroll::new();
+            }
+            return LauncherOutcome::Stay;
+        }
+
+        if self.preview_focused {
+            if matches!(
+                key.code,
+                termrock::input::KeyCode::Tab | termrock::input::KeyCode::Left
+            ) {
+                self.preview_focused = false;
+            } else {
+                self.preview_scroll.handle_key(
+                    key,
+                    self.preview.len(),
+                    self.preview_viewport.0,
+                    self.preview_width,
+                    self.preview_viewport.1,
+                );
+            }
+            return LauncherOutcome::Stay;
+        }
+
+        match self.list_state.handle_key(&self.rows, key) {
+            Outcome::Activated(id) => {
+                if let Some(action) = menu.row_action(&id) {
+                    if needs_confirmation(action) {
+                        self.pending_confirm = Some(PendingConfirm {
+                            action_id: action.id.clone(),
+                            state: ChoiceDialogState::new(Some(ConfirmChoice::Cancel)),
+                        });
+                    } else {
+                        return LauncherOutcome::Run;
+                    }
+                }
+            }
+            Outcome::Changed => self.preview_scroll = DialogScroll::new(),
+            Outcome::Cancelled => return LauncherOutcome::Quit,
+            Outcome::Ignored => {
+                if matches!(
+                    key.code,
+                    termrock::input::KeyCode::Tab | termrock::input::KeyCode::Right
+                ) {
+                    self.preview_focused = true;
+                }
+            }
+            _ => {}
+        }
+        LauncherOutcome::Stay
+    }
+
+    pub(crate) fn selected_action(&self) -> Option<String> {
+        self.list_state.selected().and_then(menu_action_id)
+    }
+
+    pub(crate) fn search(&self) -> &str {
+        self.search_state.value()
+    }
+}
+
+fn menu_action_id(id: &ActionId) -> Option<String> {
+    match id {
+        ActionId::Action { id, .. } => Some(id.clone()),
+        ActionId::Separator(_) => None,
+    }
+}
+
+pub(crate) struct LauncherExit {
+    menu: Menu,
+    selected_action: Option<String>,
+    search: String,
+    history: FrecencyStore,
+    history_receiver: mpsc::Receiver<FrecencyStore>,
+    history_loaded: bool,
+}
+
+pub(crate) async fn run_with_session(
+    terminal: &mut ratatui::Terminal<CrosstermBackend<&mut std::io::Stdout>>,
+    events: &mut EventStream,
+    theme: &Theme,
+) -> anyhow::Result<LauncherExit> {
+    let tokens = theme.clone().density(Density::default());
+    let mut menu = Menu::default();
+    let mut scans: Option<mpsc::Receiver<ScanEvent>> = None;
+    let mut scanning = true;
+    let mut launcher = LauncherState::new();
+    let mut history = FrecencyStore::default();
+    let (history_sender, history_receiver) = mpsc::sync_channel(1);
+    let mut history_sender = Some(history_sender);
+    let mut history_loaded = false;
+    let cwd = std::env::current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let mut browser: Option<crate::tui::browser::Browser> = None;
+    let mut mode = crate::tui::session::Mode::Launcher;
+    let confirm_actions = [
+        DialogAction {
+            id: ConfirmChoice::Cancel,
+            label: "Cancel",
+            enabled: true,
+            style: None,
+        },
+        DialogAction {
+            id: ConfirmChoice::Run,
+            label: "Run",
+            enabled: true,
+            style: Some(theme.style(Role::Danger)),
+        },
+    ];
+
+    let selected_action = loop {
+        if let Some(browser) = browser.as_mut()
+            && mode == crate::tui::session::Mode::Browser
+        {
+            browser.tick();
+        }
+        if !history_loaded {
+            match history_receiver.try_recv() {
+                Ok(loaded) => {
+                    history = loaded;
+                    history_loaded = true;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => history_loaded = true,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(scans) = scans.as_mut() {
+            loop {
+                match scans.try_recv() {
+                    Ok(ScanEvent::Group {
+                        provider_index,
+                        provider_id,
+                        group,
+                    }) => menu.insert_scanned_group(provider_index, provider_id, group),
+                    Ok(ScanEvent::Warning(warning)) => {
+                        menu.warnings.push(warning);
+                    }
+                    Ok(ScanEvent::Finished) | Err(mpsc::TryRecvError::Disconnected) => {
+                        scanning = false;
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                }
+            }
+        }
+
+        if mode == crate::tui::session::Mode::Browser {
+            if let Some(browser) = browser.as_mut() {
+                terminal.draw(|frame| browser.render(frame, theme))?;
+            }
+        } else {
+            launcher.render(
+                terminal,
+                LauncherRenderContext {
+                    menu: &menu,
+                    scanning,
+                    cwd: &cwd,
+                    history: &history,
+                    theme,
+                    tokens: &tokens,
+                    confirm_actions: &confirm_actions,
+                },
+            )?;
+        }
 
         if scans.is_none() {
             // First frame is now visible. Only then may blocking provider work start.
@@ -661,98 +879,67 @@ pub async fn run() -> anyhow::Result<()> {
             continue;
         }
 
-        if event::poll(Duration::from_millis(50))?
-            && let Event::Key(key) = event::read()?
-        {
+        let event = tokio::select! {
+            event = events.next() => match event {
+                Some(event) => Some(event?),
+                None => break None,
+            },
+            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => None,
+        };
+        if let Some(Event::Key(key)) = event {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
             let key = termrock::input::KeyEvent::from(key);
-            if let Some(pending) = pending_confirm.as_mut() {
-                match pending.state.handle_key(&confirm_actions, key) {
-                    Outcome::Activated(ConfirmChoice::Run) => {
-                        break Some(pending.action_id.clone());
-                    }
-                    Outcome::Activated(ConfirmChoice::Cancel) | Outcome::Cancelled => {
-                        pending_confirm = None;
-                    }
-                    Outcome::Ignored | Outcome::Changed => {}
-                    _ => {}
+            if crate::tui::session::is_mode_toggle(key) {
+                mode = mode.toggle();
+                if mode == crate::tui::session::Mode::Browser && browser.is_none() {
+                    browser = Some(crate::tui::browser::Browser::new(
+                        std::env::current_dir()?,
+                        None,
+                    ));
                 }
                 continue;
             }
-
-            if key.code == termrock::input::KeyCode::Esc {
-                if search_state.value().is_empty() {
-                    break None;
-                }
-                search_state = TextInputState::new("").with_allow_empty(true);
-                list_state.select(None);
-                continue;
-            }
-
-            if matches!(
-                key.code,
-                termrock::input::KeyCode::Char(_)
-                    | termrock::input::KeyCode::Backspace
-                    | termrock::input::KeyCode::Delete
-            ) {
-                if search_state.handle_key(key) == TextInputOutcome::Changed {
-                    list_state.select(None);
-                    preview_scroll = DialogScroll::new();
-                }
-                continue;
-            }
-
-            if preview_focused {
-                if matches!(
-                    key.code,
-                    termrock::input::KeyCode::Tab | termrock::input::KeyCode::Left
-                ) {
-                    preview_focused = false;
-                } else {
-                    preview_scroll.handle_key(
-                        key,
-                        preview.len(),
-                        preview_viewport.0,
-                        preview_width,
-                        preview_viewport.1,
-                    );
-                }
-                continue;
-            }
-
-            match list_state.handle_key(&rows, key) {
-                Outcome::Activated(id) => {
-                    if let Some(action) = menu.row_action(&id) {
-                        let action_id = action.id.clone();
-                        if needs_confirmation(action) {
-                            pending_confirm = Some(PendingConfirm {
-                                action_id,
-                                state: ChoiceDialogState::new(Some(ConfirmChoice::Cancel)),
-                            });
-                        } else {
-                            break Some(action_id);
+            if mode == crate::tui::session::Mode::Browser {
+                if let Some(browser) = browser.as_mut() {
+                    match browser.handle_key(key) {
+                        crate::tui::browser::BrowserOutcome::ReturnToLauncher => {
+                            mode = crate::tui::session::Mode::Launcher;
                         }
+                        crate::tui::browser::BrowserOutcome::Quit => break None,
+                        crate::tui::browser::BrowserOutcome::Stay => {}
                     }
                 }
-                Outcome::Changed => preview_scroll = DialogScroll::new(),
-                Outcome::Cancelled => break None,
-                Outcome::Ignored => {
-                    if matches!(
-                        key.code,
-                        termrock::input::KeyCode::Tab | termrock::input::KeyCode::Right
-                    ) {
-                        preview_focused = true;
-                    }
-                }
-                _ => {}
+                continue;
+            }
+            match launcher.handle_key(key, &menu, &confirm_actions) {
+                LauncherOutcome::Run => break launcher.selected_action(),
+                LauncherOutcome::Quit => break None,
+                LauncherOutcome::Stay => {}
             }
         }
     };
 
-    drop(terminal);
-    session.restore()?;
+    Ok(LauncherExit {
+        menu,
+        selected_action,
+        search: launcher.search().to_owned(),
+        history,
+        history_receiver,
+        history_loaded,
+    })
+}
+
+pub(crate) async fn execute(exit: LauncherExit) -> anyhow::Result<()> {
+    let LauncherExit {
+        menu,
+        selected_action,
+        search,
+        mut history,
+        history_receiver,
+        history_loaded,
+    } = exit;
     if let Some(id) = selected_action
         && let Some(action) = menu.action(&id)
     {
@@ -763,7 +950,7 @@ pub async fn run() -> anyhow::Result<()> {
                     .unwrap_or_default();
         }
         let now = now_epoch_secs();
-        history.record(&id, search_state.value(), now);
+        history.record(&id, &search, now);
         let save = tokio::task::spawn_blocking(move || history.save(now));
         let action_result = (action.run)().await;
         match save.await {
@@ -787,6 +974,31 @@ mod tests {
 
     fn menu(probe: &Probe) -> Menu {
         Menu::from_groups(groups_from_probe(probe))
+    }
+
+    #[test]
+    fn launcher_state_survives_mode_round_trip() {
+        let mut launcher = LauncherState::new();
+        for character in "cargo".chars() {
+            assert_eq!(
+                launcher
+                    .search_state
+                    .handle_key(termrock::input::KeyEvent::new(
+                        KeyCode::Char(character),
+                        termrock::input::KeyModifiers::NONE,
+                    )),
+                TextInputOutcome::Changed
+            );
+        }
+        launcher.preview_focused = true;
+        let mut mode = crate::tui::session::Mode::Launcher;
+
+        mode = mode.toggle();
+        mode = mode.toggle();
+
+        assert_eq!(mode, crate::tui::session::Mode::Launcher);
+        assert_eq!(launcher.search(), "cargo");
+        assert!(launcher.preview_focused);
     }
 
     fn actions<'a>(menu: &'a Menu, title: &str) -> Vec<&'a ActionSpec> {
@@ -1063,6 +1275,43 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn empty_query_puts_current_folder_rows_before_global_provider_rows() {
+        let menu = Menu::from_groups(vec![
+            GroupSpec {
+                id: "find".into(),
+                title: "Find".into(),
+                actions: vec![test_action("find.files", "find", Danger::Safe)],
+            },
+            GroupSpec {
+                id: CURRENT_FOLDER_GROUP_ID.into(),
+                title: "Current folder".into(),
+                actions: vec![test_action("git.status", "git: status", Danger::Safe)],
+            },
+            GroupSpec {
+                id: "cargo-project".into(),
+                title: "Cargo".into(),
+                actions: vec![test_action("cargo.test", "cargo: test", Danger::Safe)],
+            },
+        ]);
+        let rows = menu_rows(&menu, "", &Theme::phosphor());
+        let separators = rows
+            .iter()
+            .filter_map(|row| match &row.id {
+                ActionId::Separator(id) => Some(id.as_str()),
+                ActionId::Action { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            separators,
+            [CURRENT_FOLDER_GROUP_ID, "find", "cargo-project"]
+        );
+        assert_eq!(row_id(&rows[1].id), "git.status");
+        assert_eq!(row_id(&rows[3].id), "find.files");
+        assert_eq!(row_id(&rows[5].id), "cargo.test");
     }
 
     #[test]
