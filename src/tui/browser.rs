@@ -13,17 +13,20 @@ use futures::StreamExt;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Layout},
+    style::Modifier,
     text::Line,
     widgets::Paragraph,
 };
 use termrock::{
     input::KeyCode,
     layout::centered_rect,
+    scroll::{DialogScroll, max_line_width},
     style::{Density, DesignSystem as Theme, PanelChrome, Role},
     widgets::{
         Backdrop, FileEntry, FileEntryKind, FilePicker, FilePickerMode, FilePickerOutcome,
-        FilePickerPane, FilePickerState, FilePreview, List, ListRow, ListState, Panel, TextInput,
-        TextInputOutcome, TextInputState, Validation,
+        FilePickerPane, FilePickerState, FilePreview, List, ListRow, ListState, Panel, StatusBar,
+        StatusBarState, StatusSlot, TextInput, TextInputOutcome, TextInputState, Validation,
+        Viewport,
     },
 };
 use tokio::{sync::mpsc, task};
@@ -33,6 +36,8 @@ use crate::{find::FileIndex, tui::file_preview};
 const JUMP_RESULT_LIMIT: usize = 50;
 const JUMP_DIALOG_WIDTH: u16 = 92;
 const JUMP_DIALOG_HEIGHT: u16 = 20;
+const MIN_BROWSER_WIDTH: u16 = 64;
+const MIN_BROWSER_HEIGHT: u16 = 12;
 
 /// Opens the folder browser at the process working directory.
 ///
@@ -61,6 +66,7 @@ pub async fn run_at(start: PathBuf) -> anyhow::Result<()> {
     let start = target.directory;
     let theme = Theme::phosphor();
     let mut browser = Browser::new(start, target.highlight);
+    browser.shared_mode = false;
 
     let mut session = termrock::crossterm::Session::enter(
         std::io::stdout(),
@@ -77,7 +83,7 @@ pub async fn run_at(start: PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-struct Browser {
+pub(crate) struct Browser {
     picker: FilePickerState,
     sender: mpsc::UnboundedSender<WorkerMessage>,
     receiver: mpsc::UnboundedReceiver<WorkerMessage>,
@@ -91,10 +97,28 @@ struct Browser {
     jump_index_generation: u64,
     jump_generation: u64,
     pending_listing_path: Option<PathBuf>,
+    status_state: StatusBarState<BrowserHeaderSlot>,
+    preview_scroll: DialogScroll,
+    preview_viewport: (usize, usize),
+    preview_size: (usize, usize),
+    shared_mode: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum BrowserHeaderSlot {
+    Product,
+    Mode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BrowserOutcome {
+    Stay,
+    ReturnToLauncher,
+    Quit,
 }
 
 impl Browser {
-    fn new(start: PathBuf, pending_highlight: Option<PathBuf>) -> Self {
+    pub(crate) fn new(start: PathBuf, pending_highlight: Option<PathBuf>) -> Self {
         let cwd = path_text(&start);
         let mut picker = FilePickerState::new(cwd.clone())
             .with_mode(FilePickerMode::OpenAny)
@@ -117,6 +141,11 @@ impl Browser {
             jump_index_generation: 0,
             jump_generation: 0,
             pending_listing_path: None,
+            status_state: StatusBarState::default(),
+            preview_scroll: DialogScroll::new(),
+            preview_viewport: (0, 0),
+            preview_size: (0, 0),
+            shared_mode: true,
         };
         let outcome = browser.picker.request_list(cwd);
         browser.handle_picker_outcome(outcome);
@@ -128,33 +157,11 @@ impl Browser {
         terminal: &mut ratatui::Terminal<CrosstermBackend<&mut std::io::Stdout>>,
         theme: &Theme,
     ) -> anyhow::Result<()> {
-        let tokens = theme.clone().density(Density::default());
         let mut events = EventStream::new();
 
         loop {
-            terminal.draw(|frame| {
-                let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)])
-                    .areas(frame.area());
-                self.picker
-                    .set_presentation(FilePickerState::presentation_for_bounds(body));
-                frame.render_stateful_widget(
-                    &FilePicker::new(theme)
-                        .title("Holla browser")
-                        .show_preview(true),
-                    body,
-                    &mut self.picker,
-                );
-                frame.render_widget(
-                    Paragraph::new(Line::styled(
-                        "←/backspace parent  →/enter open  ↑↓ select  g jump  tab pane  esc close",
-                        theme.style(Role::TextMuted),
-                    )),
-                    footer,
-                );
-                if let Some(jump) = self.jump.as_mut() {
-                    render_jump_dialog(frame, jump, theme, &tokens);
-                }
-            })?;
+            self.tick();
+            terminal.draw(|frame| self.render(frame, theme))?;
 
             tokio::select! {
                 worker = self.receiver.recv() => {
@@ -169,7 +176,7 @@ impl Browser {
                     let event = event.context("terminal event stream failed")?;
                     if let Event::Key(key) = event
                         && key.kind == KeyEventKind::Press
-                        && self.handle_key(termrock::input::KeyEvent::from(key))
+                        && self.handle_key(termrock::input::KeyEvent::from(key)) == BrowserOutcome::Quit
                     {
                         break;
                     }
@@ -179,15 +186,173 @@ impl Browser {
         Ok(())
     }
 
-    fn handle_key(&mut self, key: termrock::input::KeyEvent) -> bool {
+    pub(crate) fn render(&mut self, frame: &mut ratatui::Frame<'_>, theme: &Theme) {
+        let tokens = theme.clone().density(Density::default());
+        if frame.area().width < MIN_BROWSER_WIDTH || frame.area().height < MIN_BROWSER_HEIGHT {
+            render_small_terminal(frame, theme);
+            if let Some(jump) = self.jump.as_mut() {
+                render_jump_dialog(frame, jump, theme, &tokens);
+            }
+            return;
+        }
+
+        let [header, context, body, footer] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+
+        let left_slots = [StatusSlot {
+            id: BrowserHeaderSlot::Product,
+            content: " holla ",
+            priority: 2,
+            min_width: 0,
+            enabled: true,
+            region: termrock::widgets::StatusRegion::Left,
+            kind: termrock::widgets::StatusKind::Text,
+            glyph: None,
+            style_explicit: true,
+            style: theme.style(Role::Accent),
+            hover_style: None,
+        }];
+        let right_slots = [StatusSlot {
+            id: BrowserHeaderSlot::Mode,
+            content: "browser",
+            priority: 1,
+            min_width: 8,
+            enabled: true,
+            region: termrock::widgets::StatusRegion::Left,
+            kind: termrock::widgets::StatusKind::Text,
+            glyph: None,
+            style_explicit: true,
+            style: theme.style(Role::TextMuted),
+            hover_style: None,
+        }];
+        frame.render_stateful_widget(
+            &StatusBar::new(&left_slots, &right_slots, theme).alpha(1.0),
+            header,
+            &mut self.status_state,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                format!("Browse · {}", self.cwd.display()),
+                theme.style(Role::TextMuted),
+            )),
+            context,
+        );
+
+        let [list_area, preview_area] =
+            Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .areas(body);
+        self.picker
+            .set_presentation(FilePickerState::presentation_for_bounds(list_area));
+        frame.render_stateful_widget(
+            &FilePicker::new(theme)
+                .title("holla")
+                .show_count(false)
+                .show_preview(false)
+                .show_breadcrumbs(false)
+                .show_path(false)
+                .show_status(true)
+                .show_footer(false),
+            list_area,
+            &mut self.picker,
+        );
+
+        let preview_lines = preview_lines(self.picker.preview(), theme);
+        self.preview_size = (preview_lines.len(), max_line_width(&preview_lines));
+        self.preview_viewport = (
+            usize::from(preview_area.height.saturating_sub(2)),
+            usize::from(preview_area.width.saturating_sub(2)),
+        );
+        frame.render_stateful_widget(
+            &Viewport::new(&preview_lines, theme)
+                .title("Preview")
+                .emphasis(if self.picker.pane() == FilePickerPane::Preview {
+                    PanelChrome::Focused
+                } else {
+                    PanelChrome::Normal
+                })
+                .content_style(theme.style(Role::Text)),
+            preview_area,
+            &mut self.preview_scroll,
+        );
+        let mode_hint = if footer.width < 96 {
+            if self.shared_mode {
+                "ctrl-o/esc"
+            } else {
+                "esc close"
+            }
+        } else if self.shared_mode {
+            "ctrl-o commands  esc commands"
+        } else {
+            "esc close"
+        };
+        let footer_text = if footer.width < 96 {
+            format!("↑↓ move  enter open  ← parent  g jump  tab preview  {mode_hint}")
+        } else {
+            format!("↑↓ select  ⏎/→ open  ←/backspace parent  g jump  tab preview  {mode_hint}")
+        };
+        frame.render_widget(
+            Paragraph::new(Line::styled(footer_text, theme.style(Role::TextMuted))),
+            footer,
+        );
+        if let Some(jump) = self.jump.as_mut() {
+            render_jump_dialog(frame, jump, theme, &tokens);
+        }
+    }
+
+    pub(crate) fn tick(&mut self) {
+        while let Ok(worker) = self.receiver.try_recv() {
+            self.apply_worker_message(worker);
+        }
+    }
+
+    pub(crate) fn handle_key(&mut self, key: termrock::input::KeyEvent) -> BrowserOutcome {
         if self.jump.is_some() {
             self.handle_jump_key(key);
-            return false;
+            return BrowserOutcome::Stay;
+        }
+        if self.shared_mode && key.code == KeyCode::Esc && key.modifiers.is_empty() {
+            return BrowserOutcome::ReturnToLauncher;
         }
         if opens_jump_dialog(self.picker.pane(), key) {
             self.jump = Some(JumpDialog::new(self.cwd.clone()));
             self.request_jump_suggestions();
-            return false;
+            return BrowserOutcome::Stay;
+        }
+        if key.code == KeyCode::Tab && key.modifiers.is_empty() {
+            let outcome = match self.picker.pane() {
+                FilePickerPane::List => {
+                    let _ = self.picker.handle_key(key);
+                    self.picker.handle_key(key)
+                }
+                FilePickerPane::Path => self.picker.handle_key(termrock::input::KeyEvent::new(
+                    KeyCode::Esc,
+                    termrock::input::KeyModifiers::NONE,
+                )),
+                FilePickerPane::Preview => self.picker.handle_key(key),
+                _ => self.picker.handle_key(key),
+            };
+            self.handle_picker_outcome(outcome);
+            return BrowserOutcome::Stay;
+        }
+        if self.picker.pane() == FilePickerPane::Preview {
+            if matches!(key.code, KeyCode::Tab | KeyCode::Left | KeyCode::Esc) {
+                let outcome = self.picker.handle_key(key);
+                self.handle_picker_outcome(outcome);
+            } else {
+                let _ = self.preview_scroll.handle_key(
+                    key,
+                    self.preview_size.0,
+                    self.preview_viewport.0,
+                    self.preview_size.1,
+                    self.preview_viewport.1,
+                );
+            }
+            return BrowserOutcome::Stay;
         }
         let previous_cwd = self.cwd.clone();
         let outcome = self.picker.handle_key(key);
@@ -197,10 +362,13 @@ impl Browser {
             self.pending_highlight = Some(previous_cwd);
         }
         if matches!(outcome, FilePickerOutcome::Cancelled) {
-            return true;
+            if self.shared_mode {
+                return BrowserOutcome::ReturnToLauncher;
+            }
+            return BrowserOutcome::Quit;
         }
         self.handle_picker_outcome(outcome);
-        false
+        BrowserOutcome::Stay
     }
 
     fn handle_jump_key(&mut self, key: termrock::input::KeyEvent) {
@@ -411,6 +579,7 @@ impl Browser {
     }
 
     fn request_preview(&mut self, path: PathBuf, directory: bool, generation: u64) {
+        self.preview_scroll = DialogScroll::new();
         let _ = self.picker.apply_preview(
             generation,
             FilePreview::text(
@@ -425,6 +594,7 @@ impl Browser {
     }
 
     fn invalidate_preview(&mut self) {
+        self.preview_scroll = DialogScroll::new();
         let generation = self.picker.preview_generation();
         let _ = self.picker.apply_preview(generation, FilePreview::new());
     }
@@ -486,6 +656,60 @@ impl Browser {
         picker_entry_is_directory(&self.picker, value)
     }
 }
+
+fn render_small_terminal(frame: &mut ratatui::Frame<'_>, theme: &Theme) {
+    let area = centered_rect(60, 3, frame.area());
+    let lines = vec![
+        Line::styled(
+            format!("Holla browser needs at least {MIN_BROWSER_WIDTH}×{MIN_BROWSER_HEIGHT}"),
+            theme.style(Role::TextStrong).add_modifier(Modifier::BOLD),
+        ),
+        Line::styled(
+            format!(
+                "Current terminal: {}×{}",
+                frame.area().width,
+                frame.area().height
+            ),
+            theme.style(Role::TextMuted),
+        ),
+        Line::styled(
+            "Resize the terminal, then retry",
+            theme.style(Role::TextMuted),
+        ),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center),
+        area,
+    );
+}
+
+fn preview_lines<'a>(preview: Option<&'a FilePreview>, theme: &Theme) -> Vec<Line<'a>> {
+    let Some(preview) = preview else {
+        return vec![Line::styled("No preview", theme.style(Role::TextMuted))];
+    };
+    if let Some(error) = preview.error.as_deref() {
+        return vec![Line::styled(error, theme.style(Role::Danger))];
+    }
+
+    let mut lines = Vec::with_capacity(preview.lines.len() + 1);
+    if !preview.title.is_empty() {
+        lines.push(Line::styled(
+            preview.title.as_str(),
+            theme.style(Role::TextStrong).add_modifier(Modifier::BOLD),
+        ));
+    }
+    lines.extend(
+        preview
+            .lines
+            .iter()
+            .map(|line| Line::styled(line.as_str(), theme.style(Role::Text))),
+    );
+    if lines.is_empty() {
+        lines.push(Line::styled("No preview", theme.style(Role::TextMuted)));
+    }
+    lines
+}
+
 impl Drop for Browser {
     fn drop(&mut self) {
         if let Some(index) = self.jump_index.take() {
@@ -1461,7 +1685,142 @@ fn accept_listing_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
     use tempfile::tempdir;
+
+    fn screen_text(terminal: &Terminal<TestBackend>) -> String {
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer.cell((x, y)).expect("buffer cell").symbol());
+            }
+            text.push('\n');
+        }
+        text
+    }
+
+    #[tokio::test]
+    async fn shared_escape_returns_to_launcher_but_standalone_escape_quits() {
+        let fixture = tempdir().unwrap();
+        let mut shared = Browser::new(fixture.path().to_path_buf(), None);
+        assert_eq!(
+            shared.handle_key(termrock::input::KeyEvent::new(
+                KeyCode::Esc,
+                termrock::input::KeyModifiers::NONE,
+            )),
+            BrowserOutcome::ReturnToLauncher
+        );
+
+        let mut standalone = Browser::new(fixture.path().to_path_buf(), None);
+        standalone.shared_mode = false;
+        assert_eq!(
+            standalone.handle_key(termrock::input::KeyEvent::new(
+                KeyCode::Esc,
+                termrock::input::KeyModifiers::NONE,
+            )),
+            BrowserOutcome::Quit
+        );
+
+        let mut shared_preview = Browser::new(fixture.path().to_path_buf(), None);
+        let tab = termrock::input::KeyEvent::new(KeyCode::Tab, termrock::input::KeyModifiers::NONE);
+        let _ = shared_preview.handle_key(tab);
+        assert_eq!(shared_preview.picker.pane(), FilePickerPane::Preview);
+        assert_eq!(
+            shared_preview.handle_key(termrock::input::KeyEvent::new(
+                KeyCode::Esc,
+                termrock::input::KeyModifiers::NONE,
+            )),
+            BrowserOutcome::ReturnToLauncher
+        );
+    }
+
+    #[tokio::test]
+    async fn render_matches_launcher_shell_without_picker_chrome() {
+        let fixture = tempdir().unwrap();
+        let mut browser = Browser::new(fixture.path().to_path_buf(), None);
+        let listing_generation = browser.picker.listing_generation();
+        assert!(browser.picker.apply_listing(
+            listing_generation,
+            path_text(fixture.path()),
+            vec![FileEntry::file(
+                "README.md",
+                "README.md",
+                path_text(&fixture.path().join("README.md")),
+            )],
+            None,
+        ));
+        let preview_generation = browser.picker.preview_generation();
+        assert!(browser.picker.apply_preview(
+            preview_generation,
+            FilePreview::text("README.md", ["preview body".to_owned()]),
+        ));
+        let theme = Theme::phosphor();
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| browser.render(frame, &theme))
+            .unwrap();
+
+        let screen = screen_text(&terminal);
+        let rows = screen.lines().collect::<Vec<_>>();
+        assert!(rows[0].contains("holla"));
+        assert!(rows[0].contains("browser"));
+        assert!(rows[1].contains(&format!("Browse · {}", fixture.path().display())));
+        assert!(
+            screen.contains("┌ holla"),
+            "left panel title missing: {screen}"
+        );
+        assert!(
+            screen.contains("┌ Preview"),
+            "right panel title missing: {screen}"
+        );
+        assert!(screen.contains("README.md"));
+        assert!(screen.contains("preview body"));
+        assert!(screen.contains("ctrl-o commands"));
+        assert!(!screen.contains("Path…"));
+        assert!(!screen.contains(" selected"));
+    }
+
+    #[tokio::test]
+    async fn small_terminal_shows_message_instead_of_browser_chrome() {
+        let fixture = tempdir().unwrap();
+        let mut browser = Browser::new(fixture.path().to_path_buf(), None);
+        let theme = Theme::phosphor();
+        let backend = TestBackend::new(52, 9);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| browser.render(frame, &theme))
+            .unwrap();
+
+        let screen = screen_text(&terminal);
+        assert!(screen.contains("Holla browser needs at least 64×12"));
+        assert!(screen.contains("Current terminal: 52×9"));
+        assert!(!screen.contains("┌ holla"));
+        assert!(!screen.contains("┌ Preview"));
+    }
+
+    #[tokio::test]
+    async fn minimum_terminal_uses_compact_footer_controls() {
+        let fixture = tempdir().unwrap();
+        let mut browser = Browser::new(fixture.path().to_path_buf(), None);
+        let theme = Theme::phosphor();
+        let backend = TestBackend::new(MIN_BROWSER_WIDTH, MIN_BROWSER_HEIGHT);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| browser.render(frame, &theme))
+            .unwrap();
+
+        let screen = screen_text(&terminal);
+        assert!(
+            screen.contains("ctrl-o/esc"),
+            "compact footer missing: {screen}"
+        );
+        assert!(!screen.contains("ctrl-o commands"));
+    }
 
     #[test]
     fn bare_g_opens_jump_only_from_list_pane() {
