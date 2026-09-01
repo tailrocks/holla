@@ -1,6 +1,8 @@
 pub mod analyzer;
 pub mod app;
+pub mod browser;
 pub mod cleanup_flow;
+mod file_preview;
 pub mod finder;
 pub mod insights;
 pub mod menu;

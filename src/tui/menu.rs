@@ -27,6 +27,8 @@ use crate::{
     search::{SearchHit, search_with_history},
 };
 
+const CURRENT_FOLDER_GROUP_ID: &str = "current-folder";
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum ActionId {
     Separator(String),
@@ -239,7 +241,7 @@ fn menu_rows_with_history(
             }));
         }
         let mut previous_group = None;
-        for group in &menu.groups {
+        for group in empty_query_groups(menu) {
             if previous_group != Some(group.id.as_str()) {
                 rows.push(ListRow {
                     id: ActionId::Separator(group.id.to_owned()),
@@ -305,6 +307,17 @@ fn menu_rows_with_history(
             }
         })
         .collect()
+}
+
+fn empty_query_groups(menu: &Menu) -> impl Iterator<Item = &GroupSpec> {
+    menu.groups
+        .iter()
+        .filter(|group| group.id == CURRENT_FOLDER_GROUP_ID)
+        .chain(
+            menu.groups
+                .iter()
+                .filter(|group| group.id != CURRENT_FOLDER_GROUP_ID),
+        )
 }
 
 fn highlighted_hit(group: &GroupSpec, hit: &SearchHit, theme: &Theme) -> Line<'static> {
@@ -1063,6 +1076,43 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn empty_query_puts_current_folder_rows_before_global_provider_rows() {
+        let menu = Menu::from_groups(vec![
+            GroupSpec {
+                id: "find".into(),
+                title: "Find".into(),
+                actions: vec![test_action("find.files", "find", Danger::Safe)],
+            },
+            GroupSpec {
+                id: CURRENT_FOLDER_GROUP_ID.into(),
+                title: "Current folder".into(),
+                actions: vec![test_action("git.status", "git: status", Danger::Safe)],
+            },
+            GroupSpec {
+                id: "cargo-project".into(),
+                title: "Cargo".into(),
+                actions: vec![test_action("cargo.test", "cargo: test", Danger::Safe)],
+            },
+        ]);
+        let rows = menu_rows(&menu, "", &Theme::phosphor());
+        let separators = rows
+            .iter()
+            .filter_map(|row| match &row.id {
+                ActionId::Separator(id) => Some(id.as_str()),
+                ActionId::Action { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            separators,
+            [CURRENT_FOLDER_GROUP_ID, "find", "cargo-project"]
+        );
+        assert_eq!(row_id(&rows[1].id), "git.status");
+        assert_eq!(row_id(&rows[3].id), "find.files");
+        assert_eq!(row_id(&rows[5].id), "cargo.test");
     }
 
     #[test]

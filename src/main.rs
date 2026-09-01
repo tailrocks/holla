@@ -13,7 +13,7 @@ mod tui;
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
-use std::{process::ExitCode, time::Instant};
+use std::{path::PathBuf, process::ExitCode, time::Instant};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -35,6 +35,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum CliCommand {
+    /// Browse folders and preview files.
+    Browse {
+        /// Directory to browse. Defaults to the current directory.
+        path: Option<PathBuf>,
+    },
     /// List detected actions. JSON is a stable `{"v":1,"actions":[...]}` envelope.
     List {
         /// Emit the versioned machine-readable schema.
@@ -71,10 +76,19 @@ async fn run(cli: Cli) -> anyhow::Result<u8> {
         tui::menu::run().await?;
         return Ok(0);
     };
+    let command = match command {
+        CliCommand::Browse { path } => {
+            let path = path.unwrap_or(std::env::current_dir()?);
+            tui::browser::run_at(path).await?;
+            return Ok(0);
+        }
+        command => command,
+    };
     let started = Instant::now();
     let registry = providers::scan_all();
     let elapsed = started.elapsed();
     match command {
+        CliCommand::Browse { .. } => unreachable!("browse handled before provider scan"),
         CliCommand::List { json } => {
             let actions = list_actions(&registry.groups);
             if json {
@@ -203,4 +217,31 @@ fn describe_config(path: &std::path::Path) -> String {
             "not found"
         }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browse_accepts_omitted_path() {
+        let cli = Cli::try_parse_from(["holla", "browse"]).expect("browse should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Browse { path: None })
+        ));
+    }
+
+    #[test]
+    fn browse_accepts_explicit_path() {
+        let cli = Cli::try_parse_from(["holla", "browse", "/tmp"])
+            .expect("browse with a path should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Browse { path: Some(path) })
+                if path.as_path() == std::path::Path::new("/tmp")
+        ));
+    }
 }
