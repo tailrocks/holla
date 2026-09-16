@@ -1,9 +1,7 @@
 schema = 1
-
 [generator]
 repository = "tailrocks/holla"
 revision = "752f6da981b30b774e87407362c291ec2f349ef3"
-
 [workflow]
 runners = "both"
 automatic = "both"
@@ -12,7 +10,6 @@ automatic_lanes = "github"
 github_runner = "ubuntu-24.04"
 velnor_labels = ["self-hosted", "velnor-target-mvp"]
 default_branch = "main"
-
 [release]
 enabled = true
 kind = "homebrew"
@@ -22,19 +19,9 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 source_repository = "tailrocks/holla"
 consumer_repository = "tailrocks/homebrew-holla"
 description = "Adaptive dev environment CLI"
-
 [[declare]]
 primitive = "release"
 file = "release.yml"
-
 [[declare]]
 primitive = "preview"
 file = "preview.yml"
-
-[[declare]]
-primitive = "renovate"
-file = "renovate.yml"
-
-[[declare]]
-primitive = "renovate-validate"
-file = "renovate-validate.yml"
