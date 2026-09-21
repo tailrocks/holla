@@ -7,13 +7,6 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      runner:
-        description: Execution backend
-        required: false
-        default: github
-        type: choice
-        options:
-          - github
       scope:
         description: Verification scope
         required: true
@@ -46,7 +39,10 @@ jobs:
       base_sha: ${{ steps.plan.outputs.base_sha }}
       head_sha: ${{ steps.plan.outputs.head_sha }}
       units: ${{ steps.plan.outputs.units }}
+      unit_ids: ${{ steps.plan.outputs.unit_ids }}
       full_units: ${{ steps.plan.outputs.full_units }}
+      plan_digest: ${{ steps.plan.outputs.plan_digest }}
+      excluded: ${{ steps.plan.outputs.excluded }}
       rust_matrix: ${{ steps.plan.outputs.rust_matrix }}
       # Presence-only no-work marker: `planned_no_work` is `true` or absent,
       # never `false`. Consumers MUST branch
@@ -62,7 +58,6 @@ jobs:
           persist-credentials: false
       - name: Set up Velnor workflow runtime
         id: runtime
-        if: ${{ runner.environment == 'github-hosted' }}
         uses: tailrocks/velnor/.github/actions/setup-velnor-workflow@be61acbbbfb71db6b51337e547e39de049d4fc15
         with:
           rev: be61acbbbfb71db6b51337e547e39de049d4fc15
@@ -75,8 +70,9 @@ jobs:
           CI_SCOPE_OVERRIDE: ${{ github.event.inputs.scope || '' }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.base_sha || github.event.before || 'refs/heads/main' }}
           HEAD_SHA: ${{ github.sha }}
+          VELNOR_PROVIDERS: github-hosted
+          VELNOR_EVENT_TRUSTED: ${{ (!(github.event_name == 'pull_request' && (github.event.pull_request.head.repo.fork || github.event.pull_request.user.type == 'Bot'))) && 'true' || 'false' }}
           VELNOR_EXPECTED_WORK_FILE: .velnor-ci-expected-work/expected-work.json
-          VELNOR_LANES: ${{ github.event.inputs.runner || 'github' }}
         run: |
           set -euo pipefail
           if [[ -z "${CI_SCOPE_OVERRIDE:-}" ]]; then unset CI_SCOPE_OVERRIDE; fi
@@ -226,21 +222,23 @@ jobs:
         env:
           MISE_NO_CONFIG: "1"
         run: mise exec actionlint@1.7.12 -- actionlint
-  github-rust-holla-cli:
-    name: "Rust · holla-cli"
-    if: ${{ always() && needs.plan.result == 'success' && needs.policy.result == 'success' && contains(format(',{0},', needs.plan.outputs.units), ',rust-holla-cli,') && (github.event_name == 'pull_request' || (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.runner == 'github' || github.event.inputs.runner == 'both' || github.event.inputs.runner == ''))) }}
+  github-hosted-rust-holla-cli:
+    name: "Rust · holla-cli · github-hosted — rust-holla-cli"
+    if: ${{ always() && needs.plan.result == 'success' && needs.policy.result == 'success' && contains(needs.plan.outputs.units, '"unit_id":"rust-holla-cli"') && (true) }}
     needs: [plan, policy]
     uses: ./.github/workflows/ci-unit-rust.yml
     with:
       unit: rust-holla-cli
-      lane: github
+      provider: github-hosted
       selected_units: ${{ needs.plan.outputs.units }}
+      selected_unit_ids: ${{ needs.plan.outputs.unit_ids }}
       scope: ${{ needs.plan.outputs.scope }}
       full_units: ${{ needs.plan.outputs.full_units }}
+      plan_digest: ${{ needs.plan.outputs.plan_digest }}
       base_sha: ${{ needs.plan.outputs.base_sha }}
       head_sha: ${{ needs.plan.outputs.head_sha }}
       mbx_enabled: true
-      mbx_compat: "4053d59b19f9"
+      mbx_compat: "3059fa74273e"
       mbx_dependency_files: |
         .cargo/**
         Cargo.lock
@@ -264,12 +262,14 @@ jobs:
         rust-toolchain
       cargo_root: "."
       cargo_net_offline: true
-      unit_admission: github
+      unit_platform: linux-x64
+      unit_trust: untrusted-ok
+      unit_admission: github-hosted
       validation_phases: "fmt,clippy,test"
   ci-required:
     name: ci-required
     if: ${{ always() }}
-    needs: [plan, policy, github-rust-holla-cli]
+    needs: [plan, policy, github-hosted-rust-holla-cli]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -352,13 +352,36 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
           SELECTED_UNITS: ${{ needs.plan.outputs.units }}
-          LANE_ADMITTED_GITHUB: ${{ github.event_name == 'pull_request' || (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.runner == 'github' || github.event.inputs.runner == 'both' || github.event.inputs.runner == '')) }}
+          PLAN_DIGEST: ${{ needs.plan.outputs.plan_digest }}
+          EXCLUDED: ${{ needs.plan.outputs.excluded }}
+          EXPECTED_CALLERS: "[{\"job_id\":\"github-hosted-rust-holla-cli\",\"provider\":\"github-hosted\",\"unit_id\":\"rust-holla-cli\"}]"
+          PROVIDER_ADMITTED_GITHUB_HOSTED: ${{ true }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -z "$PLAN_DIGEST" ]]; then
+            echo "plan did not freeze a plan digest: the expected set has no identity" >&2
+            exit 1
+          fi
+          echo "verdict binds plan digest $PLAN_DIGEST"
           result_for_job() {
             jq -r --arg job "$1" '.[$job].result // empty' <<<"$NEEDS_JSON"
           }
+          plan_expects() {
+            [[ "$(jq -r --arg unit "$1" --arg provider "$2" '[.[] | select(.unit_id == $unit) | .providers[] | select(. == $provider)] | length' <<<"$SELECTED_UNITS")" -gt 0 ]]
+          }
+          if ! jq -e --argjson expected "$EXPECTED_CALLERS" '($expected | type == "array") and all($expected[]; type == "object" and (.unit_id | type) == "string" and (.provider | type) == "string" and (.job_id | type) == "string")' -n; then
+            echo "generated required-caller contract is malformed" >&2
+            exit 1
+          fi
+          if ! jq -e --argjson expected "$EXPECTED_CALLERS" 'type == "array" and (map(.unit_id) | unique | length) == length and all(.[]; . as $entry | ($entry | type) == "object" and ($entry.unit_id | type) == "string" and ($entry.unit_id | length) > 0 and ($entry.providers | type) == "array" and ($entry.providers | length) > 0 and (($entry.providers | map(type == "string" and length > 0) | all)) and (($entry.providers | unique | length) == ($entry.providers | length)) and all($entry.providers[]; . as $provider | any($expected[]; .unit_id == $entry.unit_id and .provider == $provider)))' <<<"$SELECTED_UNITS" >/dev/null; then
+            echo "plan selected-unit output contains an unknown, duplicate, empty, or unmapped obligation" >&2
+            exit 1
+          fi
+          if ! jq -e 'type == "object"' <<<"$NEEDS_JSON" >/dev/null; then
+            echo "workflow needs output is malformed" >&2
+            exit 1
+          fi
           result="$(result_for_job plan)"
           if [[ "$result" != success ]]; then
             echo "required CI prerequisite plan did not pass: $result" >&2
@@ -369,25 +392,27 @@ jobs:
             echo "required CI prerequisite policy did not pass: $result" >&2
             exit 1
           fi
-          selected=",$SELECTED_UNITS,"
-          if [[ "$selected" == *",rust-holla-cli,"* ]]; then
-            result="$(result_for_job github-rust-holla-cli)"
-            if [[ "$LANE_ADMITTED_GITHUB" == true ]]; then
+          if plan_expects "rust-holla-cli" "github-hosted"; then
+            result="$(result_for_job github-hosted-rust-holla-cli)"
+            if [[ "$PROVIDER_ADMITTED_GITHUB_HOSTED" == true ]]; then
               case "$result" in
                 success) ;;
-                *) echo "selected CI job github-rust-holla-cli did not pass: $result" >&2; exit 1 ;;
+                skipped) echo "expected CI job github-hosted-rust-holla-cli was skipped: a skipped expected result cannot pass" >&2; exit 1 ;;
+                cancelled) echo "expected CI job github-hosted-rust-holla-cli was cancelled: a cancelled expected result cannot pass" >&2; exit 1 ;;
+                *) echo "expected CI job github-hosted-rust-holla-cli did not pass: $result" >&2; exit 1 ;;
               esac
             else
               case "$result" in
                 skipped) ;;
-                *) echo "selected CI job github-rust-holla-cli ran outside its lane admission (LANE_ADMITTED_GITHUB=$LANE_ADMITTED_GITHUB): $result" >&2; exit 1 ;;
+                *) echo "selected CI job github-hosted-rust-holla-cli ran outside its provider admission (PROVIDER_ADMITTED_GITHUB_HOSTED=$PROVIDER_ADMITTED_GITHUB_HOSTED): $result" >&2; exit 1 ;;
               esac
             fi
           else
-            result="$(result_for_job github-rust-holla-cli)"
+            result="$(result_for_job github-hosted-rust-holla-cli)"
             case "$result" in
-              success|skipped) ;;
-              *) echo "unselected CI job github-rust-holla-cli failed unexpectedly: $result" >&2; exit 1 ;;
+              skipped) ;;
+              success) echo "unexpected CI job github-hosted-rust-holla-cli succeeded outside the expected set: the plan did not declare it" >&2; exit 1 ;;
+              *) echo "unexpected CI job github-hosted-rust-holla-cli ran outside the expected set: $result" >&2; exit 1 ;;
             esac
           fi
   required:
