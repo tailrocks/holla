@@ -5,11 +5,10 @@ repository = "tailrocks/holla"
 revision = "be61acbbbfb71db6b51337e547e39de049d4fc15"
 
 [workflow]
-runners = "both"
+runners = "github"
 automatic_lanes = "github"
 default_dispatch_runner = "github"
 github_runner = "ubuntu-24.04"
-velnor_labels = ["self-hosted", "velnor-target-mvp"]
 default_branch = "main"
 
 [policy]

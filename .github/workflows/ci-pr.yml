@@ -9,12 +9,10 @@ on:
       runner:
         description: Execution backend
         required: false
-        default: both
+        default: github
         type: choice
         options:
-          - velnor
           - github
-          - both
       scope:
         description: Verification scope
         required: true
@@ -77,7 +75,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.base_sha || github.event.before || 'refs/heads/main' }}
           HEAD_SHA: ${{ github.sha }}
           VELNOR_EXPECTED_WORK_FILE: .velnor-ci-expected-work/expected-work.json
-          VELNOR_LANES: ${{ github.event.inputs.runner || 'both' }}
+          VELNOR_LANES: ${{ github.event.inputs.runner || 'github' }}
         run: |
           set -euo pipefail
           if [[ -z "${CI_SCOPE_OVERRIDE:-}" ]]; then unset CI_SCOPE_OVERRIDE; fi
@@ -117,28 +115,6 @@ jobs:
           path: ${{ runner.temp }}/velnor-workflow-runtime
           if-no-files-found: error
           retention-days: 7
-  velnor-lane-admission:
-    name: "Control / Velnor admission"
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Velnor lane omitted for fork
-        run: |
-          echo '::notice::Velnor lane omitted for fork pull request; validating GitHub lane only.'
-  prepare-cargo:
-    name: "Control / Prepare Cargo"
-    if: ${{ !cancelled() && needs.plan.result == 'success' && (contains(format(',{0},', needs.plan.outputs.units), ',rust-holla-cli,')) && ((github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.runner == 'velnor' || github.event.inputs.runner == 'both' || github.event.inputs.runner == ''))) }}
-    needs: [plan]
-    uses: ./.github/workflows/ci-unit-rust.yml
-    with:
-      unit: rust-holla-cli
-      lane: control
-      selected_units: ${{ needs.plan.outputs.units }}
-      scope: ${{ needs.plan.outputs.scope }}
-      full_units: ${{ needs.plan.outputs.full_units }}
-      base_sha: ${{ needs.plan.outputs.base_sha }}
-      head_sha: ${{ needs.plan.outputs.head_sha }}
   github-rust-holla-cli:
     name: "Rust · holla-cli"
     if: ${{ !cancelled() && needs.plan.result == 'success' && contains(format(',{0},', needs.plan.outputs.units), ',rust-holla-cli,') && (github.event_name == 'pull_request' || (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.runner == 'github' || github.event.inputs.runner == 'both' || github.event.inputs.runner == ''))) }}
@@ -179,28 +155,10 @@ jobs:
       cargo_net_offline: true
       unit_admission: github
       validation_phases: "fmt,clippy,test"
-  velnor-rust-holla-cli:
-    name: "Rust · holla-cli"
-    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.prepare-cargo.result == 'success' || needs.prepare-cargo.result == 'skipped') && contains(format(',{0},', needs.plan.outputs.units), ',rust-holla-cli,') && ((github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.runner == 'velnor' || github.event.inputs.runner == 'both' || github.event.inputs.runner == ''))) }}
-    needs: [plan, prepare-cargo]
-    uses: ./.github/workflows/ci-unit-rust.yml
-    with:
-      unit: rust-holla-cli
-      lane: velnor
-      selected_units: ${{ needs.plan.outputs.units }}
-      scope: ${{ needs.plan.outputs.scope }}
-      full_units: ${{ needs.plan.outputs.full_units }}
-      base_sha: ${{ needs.plan.outputs.base_sha }}
-      head_sha: ${{ needs.plan.outputs.head_sha }}
-      mbx_enabled: true
-      cargo_net_offline: true
-      host_warm_layers: "rustup,mold,mbx,cargo"
-      unit_admission: velnor
-      validation_phases: "fmt,clippy,test"
   ci-required:
     name: ci-required
     if: ${{ !cancelled() }}
-    needs: [plan, velnor-lane-admission, prepare-cargo, github-rust-holla-cli, velnor-rust-holla-cli]
+    needs: [plan, github-rust-holla-cli]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -284,7 +242,6 @@ jobs:
           NEEDS_JSON: ${{ toJSON(needs) }}
           SELECTED_UNITS: ${{ needs.plan.outputs.units }}
           LANE_ADMITTED_GITHUB: ${{ github.event_name == 'pull_request' || (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.runner == 'github' || github.event.inputs.runner == 'both' || github.event.inputs.runner == '')) }}
-          LANE_ADMITTED_VELNOR: ${{ (github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.runner == 'velnor' || github.event.inputs.runner == 'both' || github.event.inputs.runner == '')) }}
         shell: bash
         run: |
           set -euo pipefail
@@ -296,32 +253,7 @@ jobs:
             echo "required CI prerequisite plan did not pass: $result" >&2
             exit 1
           fi
-          result="$(result_for_job velnor-lane-admission)"
-          case "$result" in
-            success|skipped) ;;
-            *) echo "required CI prerequisite velnor-lane-admission did not pass: $result" >&2; exit 1 ;;
-          esac
           selected=",$SELECTED_UNITS,"
-          if [[ "$selected" == *",rust-holla-cli,"* ]]; then
-            result="$(result_for_job prepare-cargo)"
-            if [[ "$LANE_ADMITTED_VELNOR" == true ]]; then
-              case "$result" in
-                success) ;;
-                *) echo "selected CI prerequisite prepare-cargo did not pass: $result" >&2; exit 1 ;;
-              esac
-            else
-              case "$result" in
-                skipped) ;;
-                *) echo "selected CI prerequisite prepare-cargo ran outside its lane admission (LANE_ADMITTED_VELNOR=$LANE_ADMITTED_VELNOR): $result" >&2; exit 1 ;;
-              esac
-            fi
-          else
-            result="$(result_for_job prepare-cargo)"
-            case "$result" in
-              success|skipped) ;;
-              *) echo "unselected CI prerequisite prepare-cargo failed unexpectedly: $result" >&2; exit 1 ;;
-            esac
-          fi
           if [[ "$selected" == *",rust-holla-cli,"* ]]; then
             result="$(result_for_job github-rust-holla-cli)"
             if [[ "$LANE_ADMITTED_GITHUB" == true ]]; then
@@ -340,26 +272,6 @@ jobs:
             case "$result" in
               success|skipped) ;;
               *) echo "unselected CI job github-rust-holla-cli failed unexpectedly: $result" >&2; exit 1 ;;
-            esac
-          fi
-          if [[ "$selected" == *",rust-holla-cli,"* ]]; then
-            result="$(result_for_job velnor-rust-holla-cli)"
-            if [[ "$LANE_ADMITTED_VELNOR" == true ]]; then
-              case "$result" in
-                success) ;;
-                *) echo "selected CI job velnor-rust-holla-cli did not pass: $result" >&2; exit 1 ;;
-              esac
-            else
-              case "$result" in
-                skipped) ;;
-                *) echo "selected CI job velnor-rust-holla-cli ran outside its lane admission (LANE_ADMITTED_VELNOR=$LANE_ADMITTED_VELNOR): $result" >&2; exit 1 ;;
-              esac
-            fi
-          else
-            result="$(result_for_job velnor-rust-holla-cli)"
-            case "$result" in
-              success|skipped) ;;
-              *) echo "unselected CI job velnor-rust-holla-cli failed unexpectedly: $result" >&2; exit 1 ;;
             esac
           fi
   required:
