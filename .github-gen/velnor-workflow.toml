@@ -2,14 +2,13 @@ schema = 1
 
 [generator]
 repository = "tailrocks/holla"
-revision = "b9c3156cdb88e63c11b9e595a3e694b02238c09a"
+revision = "be61acbbbfb71db6b51337e547e39de049d4fc15"
 
 [workflow]
-runners = "both"
+runners = "github"
 automatic_lanes = "github"
 default_dispatch_runner = "github"
 github_runner = "ubuntu-24.04"
-velnor_labels = ["self-hosted", "velnor-target-mvp"]
 default_branch = "main"
 
 [policy]
