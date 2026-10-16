@@ -146,6 +146,17 @@ jobs:
           VELNOR_INTERNAL_OP: write-request-v1
           VELNOR_REQUEST_FILE: ${{ runner.temp }}/velnor/request/plan-v1-request.json
         run: "\"$RUNNER_TEMP\"'/velnor/bin/velnor-actions-0.1.9'"
+      - name: Diag qualify
+        env:
+          MISE_CARGO_HOME: ${{ runner.temp }}/velnor/cargo
+          MISE_RUSTUP_HOME: ${{ runner.temp }}/velnor/rustup
+        run: |
+          echo "ambient CARGO_HOME=${CARGO_HOME:-unset} RUSTUP_HOME=${RUSTUP_HOME:-unset} HOME=$HOME"
+          echo "db:"; ls "$RUNNER_TEMP/velnor/cargo/git/db" 2>&1 | head -5
+          echo "checkouts:"; ls "$RUNNER_TEMP/velnor/cargo/git/checkouts" 2>&1 | head -5
+          echo "registry:"; ls "$RUNNER_TEMP/velnor/cargo/registry" 2>&1 | head -5
+          mise --no-config --no-env --no-hooks exec rust@1.98.0 -- sh -c 'echo exec CARGO_HOME=$CARGO_HOME RUSTUP_HOME=$RUSTUP_HOME which-cargo=$(which cargo)'
+          mise --no-config --no-env --no-hooks exec rust@1.98.0 -- cargo metadata --format-version 1 --locked --offline --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" > /dev/null; echo "qualify exit=$?"
       - name: Check generated files
         env:
           MISE_CARGO_HOME: ${{ runner.temp }}/velnor/cargo
