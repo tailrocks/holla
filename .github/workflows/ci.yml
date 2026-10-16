@@ -157,6 +157,13 @@ jobs:
           echo "registry:"; ls "$RUNNER_TEMP/velnor/cargo/registry" 2>&1 | head -5
           mise --no-config --no-env --no-hooks exec rust@1.98.0 -- sh -c 'echo exec CARGO_HOME=$CARGO_HOME RUSTUP_HOME=$RUSTUP_HOME which-cargo=$(which cargo)'
           mise --no-config --no-env --no-hooks exec rust@1.98.0 -- cargo metadata --format-version 1 --locked --offline --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" > /dev/null; echo "qualify exit=$?"
+          mkdir -p "$RUNNER_TEMP/shim"
+          printf '#!/bin/sh\n{ echo "ARGV:"; printf "  %%s\\n" "$@"; echo "ENV:"; env | LC_ALL=C sort; } > "$RUNNER_TEMP/shim/mise-env.txt"\nexec "$(command -v mise)" "$@"\n' > "$RUNNER_TEMP/shim/mise"
+          chmod +x "$RUNNER_TEMP/shim/mise"
+          echo "shell mise=$(command -v mise) mise-version=$(mise --version 2>&1 | head -1)"
+          PATH="$RUNNER_TEMP/shim:$PATH" "$RUNNER_TEMP/velnor/bin/velnor-actions-0.1.9" generate --output-dir "$RUNNER_TEMP/velnor-actions-diag"; echo "diag generate exit=$?"
+          echo "=== child mise capture (first 80 lines) ==="
+          head -80 "$RUNNER_TEMP/shim/mise-env.txt"
       - name: Check generated files
         env:
           MISE_CARGO_HOME: ${{ runner.temp }}/velnor/cargo
