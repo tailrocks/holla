@@ -163,9 +163,19 @@ jobs:
           { echo "ARGV:"; printf '  %s\n' "$@"; echo "ENV:"; env | LC_ALL=C sort; } > "$RUNNER_TEMP/shim/shell-env.txt"
           printf '#!/bin/sh\n{ echo "SPAWN argv:"; printf "  %%s\\n" "$@"; echo "SPAWN env:"; env | LC_ALL=C sort; } >> "%s/spawn-log.txt"\nexec %s "$@"\n' "$RUNNER_TEMP/shim" "$REAL_MISE" > "$RUNNER_TEMP/shim/mise"
           chmod +x "$RUNNER_TEMP/shim/mise"
+          set +e
           PATH="$RUNNER_TEMP/shim:$PATH" "$RUNNER_TEMP/velnor/bin/velnor-actions-0.1.9" generate --output-dir "$RUNNER_TEMP/velnor-actions-diag"; echo "diag generate exit=$?"
-          echo "=== spawn log (grep home-related) ==="
-          grep -E "SPAWN argv|^  /|^MISE_|^CARGO|^RUSTUP|^HOME=|^PATH=|^  mise|^  cargo|^  --|^  rust|^  exec" "$RUNNER_TEMP/shim/spawn-log.txt" 2>/dev/null | head -100
+          echo "=== spawn log ==="
+          wc -l "$RUNNER_TEMP/shim/spawn-log.txt" 2>&1
+          head -150 "$RUNNER_TEMP/shim/spawn-log.txt" 2>&1
+          set -e
+      - name: Upload spawn log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diag-spawn-log
+          path: /home/runner/work/_temp/shim/spawn-log.txt
+          if-no-files-found: ignore
       - name: Check generated files
         env:
           MISE_CARGO_HOME: ${{ runner.temp }}/velnor/cargo
