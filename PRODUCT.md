@@ -13,7 +13,7 @@ finds, and executes chosen actions with live output.
   tested core slice; platform-specific providers and cleanup insights continue
   behind trait or `cfg` seams. Windows is out of scope.
 - Terminal-only. No native app, no GUI. All UI is built from the
-  [TermRock component library](https://github.com/tailrocks/termrock), pinned
+  [TermRock component library](https://github.com/tailrocks/termrock-legacy), pinned
   by git revision. If a UI capability is missing from TermRock, it is added to
   TermRock as a reusable, product-neutral component — never hand-rolled inside
   holla.
